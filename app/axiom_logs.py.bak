@@ -193,27 +193,11 @@ def _parse_top_ips(data: dict) -> list:
 
 
 async def trim_dataset_before_date(before_date_str: str) -> dict:
-    """Delete all Axiom dataset entries before a given date or relative time.
-
-    Accepts:
-      - Relative:  1h, 2h, 24h, 3d, 7d, 30d  (hours or days ago)
-      - Date:      2025-01-15  or  2025-01-15T10:00:00
-    """
+    """Delete all dataset entries before the given date (irreversible)."""
     if not config.AXIOM_TOKEN:
         return {"ok": False, "message": "AXIOM_TOKEN تنظیم نشده."}
 
-    import re as _re
-    raw = before_date_str.strip().lower()
-    now_utc = datetime.now(timezone.utc)
-    display_label = before_date_str.strip()
-
-    m = _re.fullmatch(r"(\d+)(h|d)", raw)
-    if m:
-        amount = int(m.group(1))
-        unit = m.group(2)
-        delta_hours = amount if unit == "h" else amount * 24
-        display_label = f"{amount} ساعت پیش" if unit == "h" else f"{amount} روز پیش"
-    else:
+    try:
         dt = None
         for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
             try:
@@ -225,51 +209,24 @@ async def trim_dataset_before_date(before_date_str: str) -> dict:
             return {
                 "ok": False,
                 "message": (
-                    "فرمت نادرست. مثال‌های صحیح:\n"
-                    "<code>1h</code> — یک ساعت پیش\n"
-                    "<code>3d</code> — سه روز پیش\n"
-                    "<code>2025-01-15</code> — تاریخ مشخص"
+                    f"فرمت تاریخ نادرست: {before_date_str}\n"
+                    "مثال صحیح: 2025-01-15"
                 ),
             }
         dt = dt.replace(tzinfo=timezone.utc)
-        delta_hours = int((now_utc - dt).total_seconds() / 3600)
-
-    if delta_hours <= 0:
-        return {"ok": False, "message": "زمان وارد شده باید در گذشته باشد."}
-
-    max_duration = f"{delta_hours}h"
-    payload = {"maxDuration": max_duration}
-    headers = {
-        "Authorization": f"Bearer {config.AXIOM_TOKEN}",
-        "Content-Type": "application/json",
-    }
-    try:
-        client = await axiom_client.get()
-        r = await client.post(
-            f"{AXIOM_API_URL}/v1/datasets/{config.AXIOM_DATASET}/trim",
-            headers=headers,
-            json=payload,
-        )
-        if r.status_code in (200, 202, 204):
-            return {
-                "ok": True,
-                "message": (
-                    f"✅ داده‌های قبل از <b>{display_label}</b> "
-                    f"از dataset <code>{config.AXIOM_DATASET}</code> حذف شدند."
-                ),
-            }
-        err = r.text[:200]
-        state.log_error(f"Axiom Trim Failed: HTTP {r.status_code} - {err}")
-        return {
-            "ok": False,
-            "message": (
-                f"❌ خطا از Axiom: HTTP {r.status_code}\n<pre>{err}</pre>"
-            ),
-        }
     except Exception as e:
-        state.log_error(f"Axiom Trim Exception: {e}")
-        return {"ok": False, "message": f"❌ خطای شبکه: {e}"}
-    payload = {"maxDuration": max_duration}
+        return {"ok": False, "message": f"خطا در پارس تاریخ: {e}"}
+
+    end_time = dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    start_time = "2020-01-01T00:00:00Z"
+    # v3.5: Axiom trim API requires maxDuration field (HTTP 422 fix)
+    # maxDuration specifies how long the trim operation can run (in nanoseconds).
+    # 5 minutes = 300000000000 ns is generous for large datasets.
+    payload = {
+        "startTime": start_time,
+        "endTime": end_time,
+        "maxDuration": "300000000000",  # 5 minutes in nanoseconds
+    }
     headers = {
         "Authorization": f"Bearer {config.AXIOM_TOKEN}",
         "Content-Type": "application/json",
@@ -277,7 +234,7 @@ async def trim_dataset_before_date(before_date_str: str) -> dict:
     try:
         client = await axiom_client.get()
         r = await client.post(
-            f"{AXIOM_API_URL}/v1/datasets/{config.AXIOM_DATASET}/trim",
+            f"{AXIOM_API_URL}/v2/datasets/{config.AXIOM_DATASET}/trim",
             headers=headers,
             json=payload,
         )
