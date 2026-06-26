@@ -85,11 +85,13 @@ def index_sids() -> None:
 
 def add_sid(sid: str, uid: str) -> None:
     if sid:
-        SID_INDEX[sid] = uid
+        with lock:
+            SID_INDEX[sid] = uid
 
 
 def remove_sid(sid: str) -> None:
-    SID_INDEX.pop(sid, None)
+    with lock:
+        SID_INDEX.pop(sid, None)
 
 
 def mark_dirty() -> None:

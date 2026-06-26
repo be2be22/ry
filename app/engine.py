@@ -33,7 +33,10 @@ def get_logs() -> list[str]:
     """Drain the log queue (called by accounting loop for Axiom shipping)."""
     logs: list[str] = []
     while _log_queue:
-        logs.append(_log_queue.popleft())
+        try:
+            logs.append(_log_queue.popleft())
+        except IndexError:
+            break
     return logs
 
 

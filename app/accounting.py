@@ -203,7 +203,7 @@ async def _ip_tracker_loop() -> None:
     """Fast loop (2s) for real-time IP tracking + immediate RAM cleanup."""
     while True:
         try:
-            _parse_realtime_ips()
+            await asyncio.to_thread(_parse_realtime_ips)
             now = time.time()
             with state.lock:
                 # Remove stale IPs AND all Cloudflare IPs

@@ -417,10 +417,12 @@ def build_app() -> FastAPI:
         proxy_exists = os.path.exists(config.PROXY_ACCESS_LOG)
         proxy_size = os.path.getsize(config.PROXY_ACCESS_LOG) if proxy_exists else 0
         proxy_lines = []
-        if proxy_exists:
+        if proxy_exists and proxy_size > 0:
             try:
-                with open(config.PROXY_ACCESS_LOG) as f:
-                    proxy_lines = f.readlines()[-5:]
+                def _read_tail():
+                    with open(config.PROXY_ACCESS_LOG) as f:
+                        return f.readlines()[-5:]
+                proxy_lines = await asyncio.to_thread(_read_tail)
             except Exception:
                 pass
         now = time.time()
