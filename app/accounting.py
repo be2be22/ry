@@ -20,7 +20,7 @@ import time
 from . import config, state, engine, sysmetrics, axiom_logs
 
 _ACCEPTED_RE = re.compile(r" (\d+\.\d+\.\d+\.\d+):\d+ accepted ")
-_PROXY_LINE_RE = re.compile(r"^(.+?)\s+(/\S+)$")
+_PROXY_LINE_RE = re.compile(r"^([^|]*)\|(.+?)\s+(/\S+)$")
 
 import ipaddress as _ipaddr
 _CF_NETS = tuple(
@@ -146,8 +146,9 @@ def _parse_realtime_ips() -> None:
             continue
         m = _PROXY_LINE_RE.match(line)
         if m:
-            raw_ip, uri = m.group(1).strip(), m.group(2)
-            ip = _real_ip(raw_ip)
+            cf_ip, xff_raw, uri = m.group(1).strip(), m.group(2), m.group(3)
+            # Prefer CF-Connecting-IP (Cloudflare path), fallback to X-Forwarded-For
+            ip = _real_ip(cf_ip) if cf_ip else _real_ip(xff_raw)
             if not ip:
                 continue
             seen[ip] = seen.get(ip, 0) + 1
