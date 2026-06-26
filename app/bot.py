@@ -304,19 +304,15 @@ def _online_ips_text() -> str:
             proto = "gRPC" if pr.get("grpc") else "WS" if pr.get("ws") else ""
             entries.append((ip, dur, proto))
         grpc_users = len(state.GRPC_USERS)
-    if not entries and not grpc_users:
+    if not entries:
         return f"🟢 <b>IPهای آنلاین</b>\n\nهیچ IP فعالی نیست.\n\n<i>DEBUG: {total} IPs in STATS</i>"
-    lines = []
-    if entries:
-        entries.sort(key=lambda x: -x[1])
-        lines.append(f"🟢 <b>IPهای آنلاین</b> ({len(entries)}/{total})\n")
-        for i, (ip, dur, proto) in enumerate(entries[:30], 1):
-            name, flag = geo.lookup_country(ip)
-            country = f" {flag} {_esc(name)}" if name else ""
-            tag = f" [{proto}]" if proto else ""
-            lines.append(f"{i}. <code>{_esc(ip)}</code>{country}{tag} — {util.fmt_duration(dur)}")
-    if grpc_users:
-        lines.append(f"\n🔌 <b>کاربران gRPC آنلاین:</b> <b>{grpc_users}</b> نفر")
+    entries.sort(key=lambda x: -x[1])
+    lines = [f"🟢 <b>IPهای آنلاین</b> ({len(entries)}/{total})\n"]
+    for i, (ip, dur, proto) in enumerate(entries[:30], 1):
+        name, flag = geo.lookup_country(ip)
+        country = f" {flag} {_esc(name)}" if name else ""
+        tag = f" [{proto}]" if proto else ""
+        lines.append(f"{i}. <code>{_esc(ip)}</code>{country}{tag} — {util.fmt_duration(dur)}")
     return "\n".join(lines)
 
 
