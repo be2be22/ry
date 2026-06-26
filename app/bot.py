@@ -302,7 +302,6 @@ def _online_ips_text() -> str:
             pr = rec.get("proto", {})
             proto = "gRPC" if pr.get("grpc") else "WS" if pr.get("ws") else ""
             entries.append((ip, dur, proto))
-        grpc_users = len(state.GRPC_USERS)
     if not entries:
         return f"🟢 <b>IPهای آنلاین</b>\n\nهیچ IP فعالی نیست.\n\n<i>DEBUG: {total} IPs in STATS</i>"
     entries.sort(key=lambda x: -x[1])
