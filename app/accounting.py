@@ -214,7 +214,12 @@ def _parse_realtime_ips() -> None:
             rec["conns"] = rec.get("conns", 0) + hits
             ip_proto = proto_seen.get(ip)
             if ip_proto:
-                rec["proto"] = ip_proto
+                # Merge instead of replace — WS is a persistent connection and only
+                # logs once (on open). If we overwrite, the next gRPC batch would
+                # erase WS from rec["proto"] even though the WS tunnel is still alive.
+                existing = rec.setdefault("proto", {})
+                for k, v in ip_proto.items():
+                    existing[k] = existing.get(k, 0) + v
             state.ACTIVE_IPS.add(ip)
 
 
