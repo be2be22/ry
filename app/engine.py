@@ -1,0 +1,380 @@
+"""Xray-core subprocess management with thread-safe access.
+
+v3 changes:
+  - `_proc_lock` (threading.Lock) guards all access to the global _proc.
+  - Exponential backoff on repeated resync failures (avoids tight crash-loop).
+  - Spawn-wait uses polling (0.1s) instead of blocking sleep(1.5).
+  - Stderr reader only logs lines containing error/failed (filters INFO noise).
+  - `alive()` is lock-protected and safe to call from any thread/coroutine.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import secrets
+import subprocess
+import threading
+import time
+from collections import deque
+
+from . import config, state
+
+_proc: subprocess.Popen | None = None
+_proc_lock = threading.Lock()
+_resync_needed: bool = False
+_resync_failures: int = 0
+_log_queue: deque = deque(maxlen=500)
+
+
+def get_logs() -> list[str]:
+    """Drain the log queue (called by accounting loop for Axiom shipping)."""
+    logs: list[str] = []
+    while _log_queue:
+        logs.append(_log_queue.popleft())
+    return logs
+
+
+def _read_stderr(proc: subprocess.Popen) -> None:
+    """Background thread: read stderr lines, queue them, log critical ones."""
+    try:
+        if proc.stderr:
+            for line in proc.stderr:
+                clean = line.strip()
+                if not clean:
+                    continue
+                _log_queue.append(clean)
+                low = clean.lower()
+                # Only escalate real errors to admin-visible log
+                if "error" in low or "failed" in low or "panic" in low:
+                    state.log_error(f"XRAY: {clean[:200]}")
+    except Exception:
+        pass
+
+
+def _ensure_keys_sync() -> None:
+    """Generate Reality x25519 keys if missing."""
+    r = state.STATS["reality"]
+    if r.get("priv") and r.get("pub") and r.get("sid"):
+        return
+    try:
+        out = subprocess.run(
+            [config.CORE_BIN, "x25519"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        ).stdout
+        priv = pub = ""
+        for m in ("Private key:", "PrivateKey:"):
+            if m in out:
+                priv = out.split(m)[1].splitlines()[0].strip()
+                break
+        for m in (
+            "Password (PublicKey):",
+            "Public key:",
+            "PublicKey:",
+            "Password:",
+        ):
+            if m in out:
+                pub = out.split(m)[1].splitlines()[0].strip()
+                break
+        if priv and pub:
+            r["priv"], r["pub"] = priv, pub
+            r["sid"] = secrets.token_hex(4)
+            state.mark_dirty()
+    except Exception as e:
+        state.log_error(f"keygen: {e}")
+
+
+async def ensure_keys() -> None:
+    await asyncio.to_thread(_ensure_keys_sync)
+
+
+def _client(uid: str, tag: str) -> dict:
+    c = {"id": uid, "email": uid, "level": 0}
+    if tag == "reality":
+        c["flow"] = "xtls-rprx-vision"
+    return c
+
+
+def _active(u: dict, uid: str) -> bool:
+    if u.get("status") in ("disabled", "expired"):
+        return False
+    if u.get("expiry") and time.time() > u["expiry"]:
+        return False
+    if u.get("quota") and state.user_used(uid) >= u["quota"]:
+        return False
+    return True
+
+
+def _ws_inbound(clients: list) -> dict:
+    return {
+        "tag": "ws",
+        "listen": "127.0.0.1",
+        "port": config.WS_PORT,
+        "protocol": "vless",
+        "settings": {"clients": clients, "decryption": "none"},
+        "streamSettings": {
+            "network": "ws",
+            "security": "none",
+            "wsSettings": {"path": config.WS_PATH},
+        },
+    }
+
+
+def _reality_inbound(clients: list) -> dict:
+    r = state.STATS["reality"]
+    return {
+        "tag": "reality",
+        "listen": "0.0.0.0",
+        "port": config.REALITY_APP_PORT,
+        "protocol": "vless",
+        "settings": {"clients": clients, "decryption": "none"},
+        "streamSettings": {
+            "network": "tcp",
+            "security": "reality",
+            "realitySettings": {
+                "show": False,
+                "dest": config.REALITY_DEST,
+                "xver": 0,
+                "serverNames": config.reality_servernames(),
+                "privateKey": r["priv"],
+                "shortIds": [r["sid"]],
+            },
+        },
+    }
+
+
+def _api_inbound() -> dict:
+    return {
+        "tag": "api",
+        "listen": "127.0.0.1",
+        "port": config.API_PORT,
+        "protocol": "dokodemo-door",
+        "settings": {"address": "127.0.0.1"},
+    }
+
+
+def build_config() -> dict:
+    ws_clients: list = []
+    re_clients: list = []
+    with state.lock:
+        for uid, u in state.USERS.items():
+            if not _active(u, uid):
+                continue
+            protos = u.get("protocols", ["ws", "reality"])
+            if "ws" in protos:
+                ws_clients.append(_client(uid, "ws"))
+            if "reality" in protos:
+                re_clients.append(_client(uid, "reality"))
+    return {
+        "log": {
+            "loglevel": "info",  # needed for access log IP extraction
+            "access": config.CORE_CFG_ACCESS_LOG,
+            "dnsLog": False,
+        },
+        "stats": {},
+        "api": {"tag": "api", "services": ["HandlerService", "StatsService"]},
+        "policy": {
+            "levels": {"0": {"statsUserUplink": True, "statsUserDownlink": True}},
+            "system": {},
+        },
+        "inbounds": [
+            _api_inbound(),
+            _ws_inbound(ws_clients),
+            _reality_inbound(re_clients),
+        ],
+        "outbounds": [
+            {"protocol": "freedom", "tag": "direct"},
+            {"protocol": "blackhole", "tag": "block"},
+            {"protocol": "blackhole", "tag": "api"},
+        ],
+        "routing": {
+            "rules": [{"type": "field", "inboundTag": ["api"], "outboundTag": "api"}]
+        },
+    }
+
+
+def _spawn() -> bool:
+    """Spawn Xray subprocess. Returns True if it stays alive past initial wait."""
+    global _proc
+    try:
+        cfg = build_config()
+        with open(config.CORE_CFG, "w") as f:
+            json.dump(cfg, f, separators=(",", ":"))
+
+        with _proc_lock:
+            _proc = subprocess.Popen(
+                [config.CORE_BIN, "run", "-c", config.CORE_CFG],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+            )
+
+        # Poll for early crash (avoids 1.5s blocking sleep)
+        deadline = time.time() + config.ENGINE_SPAWN_WAIT
+        while time.time() < deadline:
+            with _proc_lock:
+                p = _proc
+            if p and p.poll() is not None:
+                state.log_error(
+                    f"Xray exited immediately with code {p.returncode}. "
+                    "Config might be invalid."
+                )
+                return False
+            time.sleep(0.1)
+
+        with _proc_lock:
+            p = _proc
+        if p and p.poll() is None:
+            t = threading.Thread(
+                target=_read_stderr, args=(p,), daemon=True
+            )
+            t.start()
+            return True
+        return False
+    except Exception as e:
+        state.log_error(f"core spawn: {e}")
+        return False
+
+
+def _get_backoff() -> float:
+    """Exponential backoff: 2, 4, 8, 16, 32, 60, 60, ..."""
+    global _resync_failures
+    if _resync_failures <= 0:
+        return 0.0
+    import math
+    secs = min(
+        config.ENGINE_RESYNC_BACKOFF_BASE * (2 ** (_resync_failures - 1)),
+        config.ENGINE_RESYNC_BACKOFF_MAX,
+    )
+    return secs
+
+
+def resync() -> None:
+    """Restart Xray with current config. Thread-safe via _proc_lock."""
+    global _proc, _resync_needed, _resync_failures
+    try:
+        _ensure_keys_sync()
+        with _proc_lock:
+            old = _proc
+        if old and old.poll() is None:
+            old.terminate()
+            try:
+                old.wait(timeout=4)
+            except Exception:
+                old.kill()
+                try:
+                    old.wait(timeout=2)
+                except Exception:
+                    pass
+        ok = _spawn()
+        with _proc_lock:
+            _resync_needed = not ok
+        if ok:
+            _resync_failures = 0
+        else:
+            _resync_failures += 1
+            backoff = _get_backoff()
+            if backoff > 0:
+                state.log_error(
+                    f"core resync failed ({_resync_failures}x); "
+                    f"backing off {backoff:.0f}s"
+                )
+                time.sleep(backoff)
+    except Exception as e:
+        state.log_error(f"core resync: {e}")
+        with _proc_lock:
+            _resync_needed = True
+
+
+def alive() -> bool:
+    """Thread-safe liveness check."""
+    with _proc_lock:
+        return bool(_proc and _proc.poll() is None)
+
+
+def should_backoff() -> bool:
+    """True if resync should be delayed due to recent failures."""
+    return _get_backoff() > 0
+
+
+async def _api(*args: str, timeout: int = 5) -> tuple[int, str]:
+    """Call Xray API via subprocess. Returns (returncode, stdout)."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            config.CORE_BIN,
+            "api",
+            args[0],
+            f"--server=127.0.0.1:{config.API_PORT}",
+            *args[1:],
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        return proc.returncode or 0, out.decode("utf-8", "ignore")
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        return -1, ""
+    except Exception as e:
+        state.log_error(f"core api {args[0]}: {e}")
+        return -1, ""
+
+
+async def hot_add(uid: str) -> bool:
+    """Add user to running Xray via API. Returns True if all protocols OK."""
+    protos = state.USERS.get(uid, {}).get("protocols", ["ws", "reality"])
+    ok = True
+    for tag in protos:
+        args = ["adu", f"-tag={tag}", f"-id={uid}", f"-email={uid}"]
+        if tag == "reality":
+            args.append("-flow=xtls-rprx-vision")
+        rc, _ = await _api(*args)
+        if rc != 0:
+            ok = False
+    return ok
+
+
+async def hot_remove(uid: str) -> None:
+    """Remove user from running Xray via API. Ignores 'not found' (rc=2)."""
+    for tag in ("ws", "reality"):
+        await _api("rmu", f"-tag={tag}", f"-email={uid}", timeout=4)
+
+
+async def apply_user(uid: str) -> None:
+    """Remove-then-re-add user (atomic update for protocol/quota changes)."""
+    u = state.USERS.get(uid)
+    await hot_remove(uid)
+    if u and _active(u, uid):
+        ok = await hot_add(uid)
+        if not ok:
+            mark_resync()
+
+
+async def query_stats() -> dict:
+    """Query & reset stats counters from Xray API."""
+    rc, out = await _api("statsquery", "-reset")
+    if rc != 0 or not out:
+        return {}
+    try:
+        return json.loads(out)
+    except Exception:
+        return {}
+
+
+def mark_resync() -> None:
+    global _resync_needed
+    _resync_needed = True
+
+
+def resync_pending() -> bool:
+    return _resync_needed
+
+
+def reset_backoff() -> None:
+    global _resync_failures
+    _resync_failures = 0

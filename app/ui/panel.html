@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="robots" content="noindex,nofollow">
+<title>Aurora · پنل مدیریت</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="shell">
+  <div class="main">
+    <div class="topbar">
+      <h2 id="view-title">داشبورد</h2>
+      <div class="top-actions">
+        <span class="pill"><span class="dot"></span><span id="online-pill">۰</span> آنلاین</span>
+        <button class="icon-btn" id="refresh" title="بروزرسانی">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
+        </button>
+        <button class="icon-btn" id="logout" title="خروج">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div id="view-dash"></div>
+    <div id="view-users" class="hidden"></div>
+    <div id="view-ips" class="hidden"></div>
+    <div id="view-settings" class="hidden"></div>
+    <div id="view-logs" class="hidden"></div>
+  </div>
+
+  <aside class="side">
+    <div class="brand">
+      <div class="logo">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 6v6c0 5 3.5 8 8 10 4.5-2 8-5 8-10V6l-8-4z"/><path d="m9 12 2 2 4-4"/></svg>
+      </div>
+      <h1>Aurora</h1>
+    </div>
+    <nav class="nav" id="nav"></nav>
+    <div class="footer">Aurora Edge · v2.0</div>
+  </aside>
+</div>
+
+<!-- Bottom Nav for Mobile -->
+<div class="bottom-nav" id="bottom-nav"></div>
+
+<!-- User modal -->
+<div class="overlay" id="ov-user">
+  <div class="modal">
+    <h3 id="um-title">کاربر جدید</h3>
+    <input type="hidden" id="um-uid">
+    <div class="field"><label>نام / برچسب</label><input id="um-label" placeholder="مثلاً علی"></div>
+    <div class="row2">
+      <div class="field"><label>مدت (روز)</label><input id="um-days" type="number" min="0" value="30"></div>
+      <div class="field"><label>حجم (GB)</label><input id="um-gb" type="number" min="0" value="0"></div>
+    </div>
+    <div class="field">
+      <label>پروتکل‌های مجاز</label>
+      <div class="chips" id="um-protos">
+        <div class="chip on" data-p="reality"><span class="cb"><svg viewBox="0 0 24 24" fill="none" stroke-width="3"><path d="m5 12 5 5L20 6"/></svg></span> Reality</div>
+        <div class="chip on" data-p="ws"><span class="cb"><svg viewBox="0 0 24 24" fill="none" stroke-width="3"><path d="m5 12 5 5L20 6"/></svg></span> WebSocket</div>
+      </div>
+    </div>
+    <div class="field"><label>IPهای دلخواه برای WS (با کاما جدا کنید)</label><input id="um-wsips" placeholder="1.2.3.4,5.6.7.8"></div>
+    <div class="field"><label>SNI اختیاری برای Reality</label><input id="um-sni" placeholder="خالی = پیش‌فرض پنل"></div>
+    <div class="field" id="um-edit-extra" style="display:none">
+      <label>وضعیت</label>
+      <select id="um-status"><option value="active">فعال</option><option value="disabled">غیرفعال</option></select>
+    </div>
+    <div class="err" id="um-err"></div>
+    <div class="modal-actions">
+      <button class="btn" id="um-save">ذخیره</button>
+      <button class="btn ghost" data-close>انصراف</button>
+    </div>
+  </div>
+</div>
+
+<!-- links modal -->
+<div class="overlay" id="ov-links">
+  <div class="modal">
+    <h3 id="lk-title">کانفیگ‌ها</h3>
+    <div class="qr-box" id="lk-qr"></div>
+    <div class="field"><label>لینک اشتراک (Subscription)</label>
+      <div class="code-box" id="lk-sub"></div>
+      <button class="btn sm" data-copy="lk-sub" style="width:100%">کپی لینک اشتراک</button>
+    </div>
+    <div id="lk-list"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" data-close>بستن</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

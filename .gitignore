@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.log
+/data/
+/state/
+*.local.json
+.DS_Store
+dist/
