@@ -100,6 +100,62 @@ async def send_to_axiom(logs: list, event_type: str = "log") -> None:
         state.log_error(f"Axiom Send Exception: {e}")
 
 
+
+
+async def purge_dataset() -> dict:
+    """حذف کامل dataset و ساخت مجدد آن — همه داده‌ها پاک می‌شوند."""
+    if not config.AXIOM_TOKEN:
+        return {"ok": False, "message": "AXIOM_TOKEN تنظیم نشده."}
+
+    headers = {
+        "Authorization": f"Bearer {config.AXIOM_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    try:
+        client = await axiom_client.get()
+        # مرحله ۱: حذف dataset
+        r_del = await client.delete(
+            f"{AXIOM_API_URL}/v1/datasets/{config.AXIOM_DATASET}",
+            headers=headers,
+        )
+        if r_del.status_code not in (200, 204, 404):
+            err = r_del.text[:200]
+            state.log_error(f"Axiom Delete Failed: HTTP {r_del.status_code} - {err}")
+            return {
+                "ok": False,
+                "message": f"❌ خطا در حذف dataset: HTTP {r_del.status_code}\n<pre>{err}</pre>",
+            }
+        # مرحله ۲: ساخت مجدد
+        r_create = await client.post(
+            f"{AXIOM_API_URL}/v1/datasets",
+            headers=headers,
+            json={
+                "name": config.AXIOM_DATASET,
+                "description": "Aurora Logs v3",
+            },
+        )
+        if r_create.status_code in (200, 201):
+            # پاک کردن کش‌های local
+            _top_ips_cache["data"] = []
+            _top_ips_cache["ts"] = 0.0
+            _unique_count_cache["value"] = 0
+            _unique_count_cache["ts"] = 0.0
+            return {
+                "ok": True,
+                "message": (
+                    f"✅ dataset <code>{config.AXIOM_DATASET}</code> کاملاً پاک و دوباره ساخته شد."
+                ),
+            }
+        err = r_create.text[:200]
+        state.log_error(f"Axiom Recreate Failed: HTTP {r_create.status_code} - {err}")
+        return {
+            "ok": False,
+            "message": f"❌ dataset حذف شد ولی ساخت مجدد ناموفق بود: HTTP {r_create.status_code}",
+        }
+    except Exception as e:
+        state.log_error(f"Axiom Purge Exception: {e}")
+        return {"ok": False, "message": f"❌ خطای شبکه: {e}"}
+
 async def _raw_fetch_top_ips() -> list:
     apl_query = (
         f"['{config.AXIOM_DATASET}']"

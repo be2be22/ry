@@ -507,6 +507,18 @@ async def _on_conv(chat_id: int, text: str) -> None:
         await send(chat_id, result["message"], kb)
         return
 
+    if flow == "axiom_purge_confirm":
+        from . import axiom_logs
+        if text.strip() == "بله حذف شود":
+            await send(chat_id, "⏳ در حال پاک کردن کامل dataset...")
+            result = await axiom_logs.purge_dataset()
+        else:
+            result = {"message": "❌ عملیات لغو شد."}
+        _clear_conv(chat_id)
+        kb = [[{"text": "🗄 مدیریت Axiom", "callback_data": "axiom_menu"}], _back_btn()]
+        await send(chat_id, result["message"], kb)
+        return
+
     if flow == "new":
         if step == "label":
             data["label"] = text
@@ -643,11 +655,25 @@ async def _on_callback(cb: dict) -> None:
         _set_conv(chat_id, "axiom_trim", "date", {})
         await send(
             chat_id,
-            "🗑 <b>حذف داده‌های Axiom بر اساس تاریخ</b>\n\n"
-            "تاریخی را که می‌خواهید <b>قبل از آن</b> همه داده‌ها حذف شوند وارد کنید.\n\n"
-            "📅 فرمت: <code>YYYY-MM-DD</code>\n"
-            "مثال: <code>2025-01-15</code>\n\n"
-            "⚠️ این عملیات <b>برگشت‌ناپذیر</b> است!\n\n"
+            "🗑 <b>حذف داده‌های Axiom</b>\n\n"
+            "یکی از فرمت‌های زیر را بفرستید:\n\n"
+            "⏱ <b>زمان نسبی:</b>\n"
+            "  • <code>1h</code> — یک ساعت پیش\n"
+            "  • <code>6h</code> — شش ساعت پیش\n"
+            "  • <code>1d</code> — یک روز پیش\n"
+            "  • <code>7d</code> — هفت روز پیش\n\n"
+            "📅 <b>تاریخ مشخص:</b>\n"
+            "  • <code>2025-01-15</code>\n\n"
+            "⚠️ این عملیات <b>برگشت‌ناپذیر</b> است!\n"
+            "یا /cancel برای لغو:",
+        )
+    elif data == "axiom_purge":
+        _set_conv(chat_id, "axiom_purge_confirm", "confirm", {})
+        await send(
+            chat_id,
+            "💣 <b>پاک کردن کامل همه داده‌های Axiom</b>\n\n"
+            "⚠️ این عملیات <b>تمام</b> داده‌های dataset را حذف می‌کند!\n\n"
+            "برای تأیید بنویس: <code>بله حذف شود</code>\n"
             "یا /cancel برای لغو:",
         )
 
@@ -659,7 +685,8 @@ async def _show_axiom_menu(chat_id: int, msg_id: int | None = None) -> None:
         "از اینجا می‌توانید داده‌های ذخیره‌شده در Axiom را مدیریت کنید."
     )
     kb = [
-        [{"text": "🗑 حذف داده‌ها قبل از تاریخ", "callback_data": "axiom_trim"}],
+        [{"text": "🗑 حذف داده‌ها قبل از تاریخ/زمان", "callback_data": "axiom_trim"}],
+        [{"text": "💣 پاک کردن کامل همه داده‌ها", "callback_data": "axiom_purge"}],
         [{"text": "📊 IPهای برتر (۳۰ روز)", "callback_data": "ips"}],
         _back_btn(),
     ]
