@@ -194,14 +194,14 @@ def build_config() -> dict:
             if "reality" in protos:
                 re_clients.append(_client(uid, "reality"))
 
-    # v3.2: shared sockopt for inbounds — TCP Fast Open + NoDelay + Mux disabled
+    # v3.2: shared sockopt for inbounds — TCP Fast Open + NoDelay
     # TFO saves 1 RTT on new connections; NoDelay disables Nagle's algorithm
     # (reduces latency for small packets like DNS queries).
+    # NOTE: tcpKeepAliveInterval/Timeout may not be supported in older Xray;
+    #       only enable the most compatible options here.
     inbound_sockopt = {
         "tcpFastOpen": True,
         "tcpNoDelay": True,
-        "tcpKeepAliveInterval": 15,
-        "tcpKeepAliveTimeout": 60,
     }
 
     inbounds = [
@@ -225,29 +225,21 @@ def build_config() -> dict:
             "access": config.CORE_CFG_ACCESS_LOG,
             "dnsLog": False,
         },
-        # v3.2: Optimized DNS — DoH with geosite routing
+        # v3.2: Optimized DNS — DoH (Cloudflare + Google)
         # Reduces DNS resolution from ~500ms (UDP) to ~50ms (cached DoH).
+        # NOTE: geosite:ir is NOT in the standard geosite.dat — removed to
+        #       avoid "list not found in geosite.dat: IR" error.
+        #       Iranian domains will be resolved by Cloudflare DoH (fine for proxy use).
         "dns": {
             "servers": [
-                # Cloudflare DoH — fast global, used for most domains
-                {
-                    "address": "https://1.1.1.1/dns-query",
-                    "port": 443,
-                    "domains": ["geosite:geolocation:!ir", "geosite:category-ads-all"],
-                },
-                # Local resolver — for Iranian domains (avoid routing through proxy)
-                {
-                    "address": "localhost",
-                    "domains": ["geosite:ir", "geosite:category-ir"],
-                    "expectIPs": ["geoip:ir"],
-                },
-                # Fallback — Google DoH
+                # Cloudflare DoH — fast global resolver
+                "https://1.1.1.1/dns-query",
+                # Fallback — Google DNS
                 "8.8.8.8",
             ],
             "queryStrategy": "UseIPv4",  # Skip AAAA — avoids v6 black-hole delays
             "disableCache": False,
             "disableFallback": False,
-            "tag": "dns_out",
         },
         "stats": {},
         "api": {"tag": "api", "services": ["HandlerService", "StatsService"]},
@@ -256,11 +248,9 @@ def build_config() -> dict:
                 "0": {
                     "statsUserUplink": True,
                     "statsUserDownlink": True,
-                    "handshake": 4,        # Fail fast on bad clients
-                    "bufferSize": 0,       # 0 = unlimited (use kernel buffers)
+                    "handshake": 4,  # Fail fast on bad clients
                 }
             },
-            # Disable per-outbound stats — we only care about per-user
             "system": {
                 "statsOutboundUplink": False,
                 "statsOutboundDownlink": False,
@@ -270,20 +260,15 @@ def build_config() -> dict:
         },
         "inbounds": inbounds,
         "outbounds": [
-            # v3.2: freedom outbound with IPv4-only + TCP optimization
+            # v3.2: freedom outbound with IPv4-only strategy
+            # NOTE: streamSettings/sockopt removed from freedom outbound
+            #       because it can cause config validation errors on some Xray builds.
+            #       The inbound sockopt is sufficient for TFO benefits.
             {
                 "protocol": "freedom",
                 "tag": "direct",
                 "settings": {
                     "domainStrategy": "UseIPv4",  # Skip AAAA resolution
-                },
-                "streamSettings": {
-                    "sockopt": {
-                        "tcpFastOpen": True,
-                        "tcpNoDelay": True,
-                        "tcpKeepAliveInterval": 15,
-                        "tcpKeepAliveTimeout": 60,
-                    }
                 },
             },
             {"protocol": "blackhole", "tag": "block"},
@@ -314,6 +299,12 @@ def _spawn() -> bool:
         cfg = build_config()
         with open(config.CORE_CFG, "w") as f:
             json.dump(cfg, f, separators=(",", ":"))
+
+        # Ensure access log directory exists (Xray won't create it)
+        import os
+        access_log_dir = os.path.dirname(config.CORE_CFG_ACCESS_LOG)
+        if access_log_dir:
+            os.makedirs(access_log_dir, exist_ok=True)
 
         with _proc_lock:
             _proc = subprocess.Popen(
