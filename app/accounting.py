@@ -187,12 +187,13 @@ async def _ip_tracker_loop() -> None:
             _parse_realtime_ips()
             now = time.time()
             with state.lock:
-                # Remove IPs not seen within ONLINE_WINDOW
+                # Remove stale IPs AND all Cloudflare IPs
                 stale = [
                     ip
-                    for ip in state.ACTIVE_IPS
+                    for ip in list(state.ACTIVE_IPS)
                     if now - state.IP_STATS.get(ip, {}).get("last", 0)
                     > config.ONLINE_WINDOW
+                    or _is_cloudflare_ip(ip)
                 ]
                 for ip in stale:
                     state.ACTIVE_IPS.discard(ip)
@@ -251,11 +252,12 @@ async def _cleanup_task() -> None:
                 for uid in orphan:
                     state.STATS["users"].pop(uid, None)
                     state.LAST_ACTIVE.pop(uid, None)
-                # Evict stale IP_STATS entries (not just ACTIVE_IPS)
+                # Evict stale IP_STATS entries AND Cloudflare IPs
                 stale_ips = [
                     ip
                     for ip, rec in state.IP_STATS.items()
                     if now - rec.get("last", 0) > config.ONLINE_WINDOW * 2
+                    or _is_cloudflare_ip(ip)
                 ]
                 for ip in stale_ips:
                     state.IP_STATS.pop(ip, None)
