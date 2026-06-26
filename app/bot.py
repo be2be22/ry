@@ -597,20 +597,20 @@ async def _on_callback(cb: dict) -> None:
         try:
             _, uid, n = data.split(":")
             await user_service.add_days(uid, int(n))
+            d = _user_detail(uid)
+            if d:
+                await send(chat_id, "✅ تمدید شد.\n\n" + d[0], d[1], edit_id=msg_id)
         except (ValueError, IndexError):
             pass
-        d = _user_detail(uid)
-        if d:
-            await send(chat_id, "✅ تمدید شد.\n\n" + d[0], d[1], edit_id=msg_id)
     elif data.startswith("addgb:"):
         try:
             _, uid, n = data.split(":")
             await user_service.add_gb(uid, float(n))
+            d = _user_detail(uid)
+            if d:
+                await send(chat_id, "✅ حجم اضافه شد.\n\n" + d[0], d[1], edit_id=msg_id)
         except (ValueError, IndexError):
             pass
-        d = _user_detail(uid)
-        if d:
-            await send(chat_id, "✅ حجم اضافه شد.\n\n" + d[0], d[1], edit_id=msg_id)
     elif data.startswith("rename:"):
         uid = data.split(":")[1]
         _set_conv(chat_id, "rename", "label", {"uid": uid})

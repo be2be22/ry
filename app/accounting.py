@@ -44,18 +44,6 @@ def _is_cloudflare_ip(ip: str) -> bool:
         return False
 
 
-def _real_ip_from_forwarded(raw: str) -> str | None:
-    """Extract real client IP from X-Forwarded-For chain, skipping Cloudflare."""
-    for part in raw.split(","):
-        ip = part.strip()
-        if not ip or ip == "-":
-            continue
-        if _is_cloudflare_ip(ip):
-            continue
-        return ip
-    return None
-
-
 def _read_log_tail(filepath: str, max_bytes: int, truncate: bool = True) -> list[str]:
     """Read the TAIL of the access log (newest entries)."""
     if not os.path.exists(filepath):

@@ -414,7 +414,6 @@ def build_app() -> FastAPI:
     @app.get(_PFX + "/api/debug-online")
     async def debug_online(request: Request):
         _guard(request)
-        import os
         proxy_exists = os.path.exists(config.PROXY_ACCESS_LOG)
         proxy_size = os.path.getsize(config.PROXY_ACCESS_LOG) if proxy_exists else 0
         proxy_lines = []
