@@ -43,6 +43,28 @@ def _is_cloudflare_ip(ip: str) -> bool:
         return False
 
 
+_PROXY_INTERNAL = ("100.64.", "10.", "172.16.", "172.17.", "172.18.", "172.19.",
+                   "172.20.", "172.21.", "172.22.", "172.23.", "172.24.", "172.25.",
+                   "172.26.", "172.27.", "172.28.", "172.29.", "172.30.", "172.31.",
+                   "192.168.", "127.")
+
+
+def _real_ip(raw: str) -> str | None:
+    """Extract real client IP from X-Forwarded-For chain, skipping proxies.
+    Chain order is: nearest_proxy, ..., original_client (last = real IP)."""
+    parts = [p.strip() for p in raw.split(",")]
+    for part in reversed(parts):
+        ip = part.strip()
+        if not ip or ip == "-":
+            continue
+        if _is_cloudflare_ip(ip):
+            continue
+        if any(ip.startswith(p) for p in _PROXY_INTERNAL):
+            continue
+        return ip
+    return None
+
+
 def _read_log_tail(filepath: str, max_bytes: int, truncate: bool = True) -> list[str]:
     """Read the TAIL of the access log (newest entries)."""
     if not os.path.exists(filepath):
@@ -121,8 +143,9 @@ def _parse_realtime_ips() -> None:
             continue
         m = _PROXY_LINE_RE.match(line)
         if m:
-            ip, uri = m.group(1).strip(), m.group(2)
-            if not ip or ip == "-" or _is_cloudflare_ip(ip):
+            raw_ip, uri = m.group(1).strip(), m.group(2)
+            ip = _real_ip(raw_ip)
+            if not ip:
                 continue
             seen[ip] = seen.get(ip, 0) + 1
             proto = "ws" if "/ws" in uri else "grpc" if "/grpc" in uri else ""
