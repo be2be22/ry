@@ -36,6 +36,12 @@ API_PORT: int = 10085
 WS_PORT: int = 18080
 WS_PATH: str = _env("WS_PATH", "/ws")
 
+# gRPC transport (VLESS over gRPC + TLS)
+# Benefits over WS: multiplexed streams, lower latency on lossy networks,
+# better performance on mobile (single TCP connection, no per-message framing).
+GRPC_PORT: int = 18081
+GRPC_PATH: str = _env("GRPC_PATH", "/grpc")  # serviceName in gRPC path
+
 # ── admin auth ───────────────────────────────────────────────────────
 # SECURITY: no default password. Startup fails if ADMIN_PASSWORD not set
 # AND no persisted hash exists yet (first-run).
@@ -130,7 +136,11 @@ ENGINE_RESYNC_BACKOFF_MAX: int = _int("ENGINE_RESYNC_BACKOFF_MAX", 60)
 ENGINE_RESYNC_BACKOFF_BASE: int = _int("ENGINE_RESYNC_BACKOFF_BASE", 2)
 
 # ── protocols ────────────────────────────────────────────────────────
-PROTOCOLS: frozenset[str] = frozenset({"ws", "reality"})
+# Supported transport protocols:
+#   ws      → VLESS + WebSocket + TLS        (legacy, widely supported)
+#   grpc    → VLESS + gRPC + TLS             (faster, multiplexed, mobile-friendly)
+#   reality → VLESS + Reality (uTLS)         (no TLS cert needed, anti-detection)
+PROTOCOLS: frozenset[str] = frozenset({"ws", "grpc", "reality"})
 
 # ── derived ──────────────────────────────────────────────────────────
 def reality_servernames() -> list[str]:

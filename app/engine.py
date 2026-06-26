@@ -122,6 +122,29 @@ def _ws_inbound(clients: list) -> dict:
     }
 
 
+def _grpc_inbound(clients: list) -> dict:
+    """VLESS over gRPC transport.
+
+    gRPC multiplexes many streams over a single HTTP/2 connection, which:
+      - Eliminates per-message WebSocket framing overhead
+      - Recovers from packet loss faster (independent stream windows)
+      - Better suits mobile networks with intermittent connectivity
+      - Lower latency for small frequent packets (DNS, etc.)
+    """
+    return {
+        "tag": "grpc",
+        "listen": "127.0.0.1",
+        "port": config.GRPC_PORT,
+        "protocol": "vless",
+        "settings": {"clients": clients, "decryption": "none"},
+        "streamSettings": {
+            "network": "grpc",
+            "security": "none",
+            "grpcSettings": {"serviceName": config.GRPC_PATH.lstrip("/")},
+        },
+    }
+
+
 def _reality_inbound(clients: list) -> dict:
     r = state.STATS["reality"]
     return {
@@ -157,16 +180,29 @@ def _api_inbound() -> dict:
 
 def build_config() -> dict:
     ws_clients: list = []
+    grpc_clients: list = []
     re_clients: list = []
     with state.lock:
         for uid, u in state.USERS.items():
             if not _active(u, uid):
                 continue
-            protos = u.get("protocols", ["ws", "reality"])
+            protos = u.get("protocols", ["ws", "grpc", "reality"])
             if "ws" in protos:
                 ws_clients.append(_client(uid, "ws"))
+            if "grpc" in protos:
+                grpc_clients.append(_client(uid, "grpc"))
             if "reality" in protos:
                 re_clients.append(_client(uid, "reality"))
+
+    inbounds = [
+        _api_inbound(),
+        _ws_inbound(ws_clients),
+    ]
+    # Only include gRPC inbound if there are clients (avoids empty listener)
+    if grpc_clients:
+        inbounds.append(_grpc_inbound(grpc_clients))
+    inbounds.append(_reality_inbound(re_clients))
+
     return {
         "log": {
             "loglevel": "info",  # needed for access log IP extraction
@@ -179,11 +215,7 @@ def build_config() -> dict:
             "levels": {"0": {"statsUserUplink": True, "statsUserDownlink": True}},
             "system": {},
         },
-        "inbounds": [
-            _api_inbound(),
-            _ws_inbound(ws_clients),
-            _reality_inbound(re_clients),
-        ],
+        "inbounds": inbounds,
         "outbounds": [
             {"protocol": "freedom", "tag": "direct"},
             {"protocol": "blackhole", "tag": "block"},
@@ -327,7 +359,7 @@ async def _api(*args: str, timeout: int = 5) -> tuple[int, str]:
 
 async def hot_add(uid: str) -> bool:
     """Add user to running Xray via API. Returns True if all protocols OK."""
-    protos = state.USERS.get(uid, {}).get("protocols", ["ws", "reality"])
+    protos = state.USERS.get(uid, {}).get("protocols", ["ws", "grpc", "reality"])
     ok = True
     for tag in protos:
         args = ["adu", f"-tag={tag}", f"-id={uid}", f"-email={uid}"]
@@ -341,7 +373,7 @@ async def hot_add(uid: str) -> bool:
 
 async def hot_remove(uid: str) -> None:
     """Remove user from running Xray via API. Ignores 'not found' (rc=2)."""
-    for tag in ("ws", "reality"):
+    for tag in ("ws", "grpc", "reality"):
         await _api("rmu", f"-tag={tag}", f"-email={uid}", timeout=4)
 
 

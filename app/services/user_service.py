@@ -30,9 +30,9 @@ def _active(u: dict, uid: str) -> bool:
 
 def _sanitize_protos(protos: list[str] | None) -> list[str]:
     if not protos:
-        return ["ws", "reality"]
+        return ["ws", "grpc", "reality"]
     filtered = [p for p in protos if p in config.PROTOCOLS]
-    return filtered or ["ws", "reality"]
+    return filtered or ["ws", "grpc", "reality"]
 
 
 async def create_user(
@@ -55,7 +55,7 @@ async def create_user(
         "status": "active",
         "expiry": int(time.time() + days * 86400) if days > 0 else 0,
         "quota": int(gb * 1024 ** 3) if gb > 0 else 0,
-        "protocols": protos,
+        "protocols": protos,  # already sanitized above
         "ws_ips": ws_ips.strip(),
         "reality_sni": reality_sni.strip(),
     }

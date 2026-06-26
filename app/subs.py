@@ -29,6 +29,22 @@ def ws_link(uid: str, server: str, domain: str, label: str) -> str:
     )
 
 
+def grpc_link(uid: str, server: str, domain: str, label: str) -> str:
+    """VLESS + gRPC + TLS link.
+
+    Key advantages over WS:
+      - type=grpc: HTTP/2 multiplexed streams (no per-message framing)
+      - serviceName: gRPC service path (must match server's grpcSettings)
+      - mode=gun: standard gRPC mode (most compatible)
+      - Lower latency on mobile networks with packet loss
+    """
+    return (
+        f"vless://{uid}@{server}:443?encryption=none&security=tls&type=grpc"
+        f"&serviceName={config.GRPC_PATH.lstrip('/')}&mode=gun"
+        f"&sni={domain}&fp=chrome#{_encode_label(label)}"
+    )
+
+
 def reality_link(uid: str, label: str, sni: str = "") -> str:
     r = state.STATS["reality"]
     if not (config.TCP_PROXY_DOMAIN and r.get("pub")):
@@ -44,7 +60,7 @@ def reality_link(uid: str, label: str, sni: str = "") -> str:
 
 def build_links(uid: str, user: dict, domain: str) -> dict:
     label = user.get("label", "user")
-    protos = user.get("protocols", ["ws", "reality"])
+    protos = user.get("protocols", ["ws", "grpc", "reality"])
     links: list[str] = []
 
     if "ws" in protos:
@@ -56,6 +72,10 @@ def build_links(uid: str, user: dict, domain: str) -> dict:
                 if ip:
                     links.append(ws_link(uid, ip, domain, f"{label}-WS-{ip}"))
 
+    if "grpc" in protos:
+        # gRPC link — same server/domain as WS (nginx routes by path)
+        links.append(grpc_link(uid, domain, domain, f"{label}-gRPC"))
+
     if "reality" in protos:
         user_sni = user.get("reality_sni", "")
         link = reality_link(uid, label, user_sni)
@@ -64,12 +84,14 @@ def build_links(uid: str, user: dict, domain: str) -> dict:
 
     sub_b64 = base64.b64encode("\n".join(links).encode()).decode()
 
-    # v3 fix: filter by URL content, not label substring
+    # Filter by URL content, not label substring (v3 fix)
     ws_links = [l for l in links if "type=ws" in l]
+    grpc_links = [l for l in links if "type=grpc" in l]
     reality_links = [l for l in links if "security=reality" in l]
 
     return {
         "ws": ws_links,
+        "grpc": grpc_links,
         "reality": reality_links,
         "sub_link": f"https://{domain}/s/{user.get('sid')}",
         "sub_b64": sub_b64,
@@ -79,7 +101,7 @@ def build_links(uid: str, user: dict, domain: str) -> dict:
 
 def clash_config(uid: str, user: dict, domain: str) -> str:
     label = user.get("label", "user")
-    protos = user.get("protocols", ["ws", "reality"])
+    protos = user.get("protocols", ["ws", "grpc", "reality"])
     proxies: list = []
     names: list = []
 
@@ -96,6 +118,24 @@ def clash_config(uid: str, user: dict, domain: str) -> str:
             "servername": domain,
             "network": "ws",
             "ws-opts": {"path": "/ws", "headers": {"Host": domain}},
+            "client-fingerprint": "chrome",
+        })
+
+    if "grpc" in protos:
+        names.append(f"{label}-gRPC")
+        proxies.append({
+            "name": f"{label}-gRPC",
+            "type": "vless",
+            "server": domain,
+            "port": 443,
+            "uuid": uid,
+            "udp": True,
+            "tls": True,
+            "servername": domain,
+            "network": "grpc",
+            "grpc-opts": {
+                "grpc-service-name": config.GRPC_PATH.lstrip("/"),
+            },
             "client-fingerprint": "chrome",
         })
 
