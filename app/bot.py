@@ -225,14 +225,13 @@ async def _dash_text() -> str:
         hist = state.STATS.get("history", [])
         active_ips = len(state.ACTIVE_IPS)
         now = time.time()
-        ipw = 0
+        ipw = ipg = 0
         for rec in state.IP_STATS.values():
             if now - rec.get("last", 0) > config.ONLINE_WINDOW:
                 continue
             pr = rec.get("proto", {})
-            if pr.get("ws"):
-                ipw += 1
-        ipg = len(state.GRPC_USERS)
+            if pr.get("ws"): ipw += 1
+            if pr.get("grpc"): ipg += 1
     online = state.online_count()
     up_bps = down_bps = 0
     if hist:

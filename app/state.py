@@ -27,8 +27,6 @@ LAST_ACTIVE: dict[str, float] = {}
 # ── IP tracking ──────────────────────────────────────────────────────
 IP_STATS: dict[str, dict] = {}
 ACTIVE_IPS: set[str] = set()
-# ── per-protocol user tracking (gRPC users detected via traffic) ────
-GRPC_USERS: set[str] = set()
 
 # ── system metrics ───────────────────────────────────────────────────
 SYS: dict = {

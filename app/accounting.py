@@ -436,23 +436,6 @@ async def loop() -> None:
                             state.STATS["total_down"] += value
                             down_delta += value
                         state.LAST_ACTIVE[uid] = time.time()
-                        # Track gRPC users by traffic
-                        u = state.USERS.get(uid)
-                        if u and "grpc" in u.get("protocols", []):
-                            state.GRPC_USERS.add(uid)
-
-            # Expire gRPC users with no recent traffic
-            if not merged:
-                with state.lock:
-                    state.GRPC_USERS.clear()
-            else:
-                with state.lock:
-                    stale_grpc = [
-                        uid for uid in state.GRPC_USERS
-                        if uid not in {k[0] for k in merged}
-                    ]
-                    for uid in stale_grpc:
-                        state.GRPC_USERS.discard(uid)
 
             ts = int(time.time())
             with state.lock:
