@@ -20,6 +20,7 @@ import time
 from . import config, state, engine, sysmetrics, axiom_logs
 
 _ACCEPTED_RE = re.compile(r" (\d+\.\d+\.\d+\.\d+):\d+ accepted ")
+_PROXY_IP_RE = re.compile(r"^(\d+\.\d+\.\d+\.\d+)$")
 
 
 def _read_log_tail(filepath: str, max_bytes: int) -> list[str]:
@@ -85,15 +86,28 @@ def _evict_oldest_ip() -> None:
 
 
 def _parse_realtime_ips() -> None:
-    """Parse access log, update IP_STATS and ACTIVE_IPS."""
+    """Parse access logs (Xray + nginx proxy), update IP_STATS and ACTIVE_IPS."""
     now = time.time()
     seen: dict[str, int] = {}
+
+    # Xray access log (direct connections, Reality)
     for line in _read_log_tail(
         config.CORE_CFG_ACCESS_LOG, config.IP_LOG_MAX_BYTES
     ):
         ip = _extract_client_ip(line)
         if ip:
             seen[ip] = seen.get(ip, 0) + 1
+
+    # Nginx proxy log (real client IPs for WS/gRPC through nginx)
+    for line in _read_log_tail(config.PROXY_ACCESS_LOG, config.IP_LOG_MAX_BYTES):
+        line = line.strip()
+        if not line:
+            continue
+        m = _PROXY_IP_RE.match(line)
+        if m:
+            ip = m.group(1)
+            if not ip.startswith("100.64.") and ip != "-":
+                seen[ip] = seen.get(ip, 0) + 1
 
     if not seen:
         return
