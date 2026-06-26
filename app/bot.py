@@ -292,18 +292,20 @@ def _online_ips_text() -> str:
     now = time.time()
     with state.lock:
         entries = []
+        total = len(state.IP_STATS)
         for ip, rec in state.IP_STATS.items():
-            if now - rec.get("last", 0) > config.ONLINE_WINDOW:
+            last = rec.get("last", 0)
+            if now - last > config.ONLINE_WINDOW:
                 continue
-            first = rec.get("first_seen", rec.get("last", now))
+            first = rec.get("first_seen", last)
             dur = int(now - first)
             pr = rec.get("proto", {})
             proto = "gRPC" if pr.get("grpc") else "WS" if pr.get("ws") else ""
             entries.append((ip, dur, proto))
     if not entries:
-        return "🟢 <b>IPهای آنلاین</b>\n\nهیچ IP فعالی در ۲ دقیقه اخیر."
+        return f"🟢 <b>IPهای آنلاین</b>\n\nهیچ IP فعالی نیست.\n\n<i>DEBUG: {total} IPs in STATS</i>"
     entries.sort(key=lambda x: -x[1])
-    lines = [f"🟢 <b>IPهای آنلاین</b> ({len(entries)})\n"]
+    lines = [f"🟢 <b>IPهای آنلاین</b> ({len(entries)}/{total})\n"]
     for i, (ip, dur, proto) in enumerate(entries[:30], 1):
         name, flag = geo.lookup_country(ip)
         country = f" {flag} {_esc(name)}" if name else ""
