@@ -367,15 +367,15 @@ def build_app() -> FastAPI:
             total_ips = len(state.IP_STATS)
             now = time.time()
             # Count IPs actually connected per protocol from nginx access logs
-            ip_ws = ip_grpc = 0
+            # WS/Reality: from IP tracking; gRPC: from traffic stats
+            ip_ws = 0
             for rec in state.IP_STATS.values():
                 if now - rec.get("last", 0) > config.ONLINE_WINDOW:
                     continue
                 pr = rec.get("proto", {})
                 if pr.get("ws"):
                     ip_ws += 1
-                if pr.get("grpc"):
-                    ip_grpc += 1
+            ip_grpc = len(state.GRPC_USERS)
         sys = state.SYS
         return {
             "totals": {"up": tu, "down": td, "all": tu + td},
