@@ -225,22 +225,13 @@ async def _dash_text() -> str:
         hist = state.STATS.get("history", [])
         active_ips = len(state.ACTIVE_IPS)
         now = time.time()
-        ow = og = ore = 0
-        for uid, u in state.USERS.items():
-            if (now - state.LAST_ACTIVE.get(uid, 0)) >= config.ONLINE_WINDOW:
-                continue
-            p = u.get("protocols", [])
-            if "ws" in p: ow += 1
-            if "grpc" in p: og += 1
-            if "reality" in p: ore += 1
-        ipw = ipg = ipr = 0
+        ipw = ipg = 0
         for rec in state.IP_STATS.values():
             if now - rec.get("last", 0) > config.ONLINE_WINDOW:
                 continue
             pr = rec.get("proto", {})
             if pr.get("ws"): ipw += 1
             elif pr.get("grpc"): ipg += 1
-            else: ipr += 1
     online = state.online_count()
     up_bps = down_bps = 0
     if hist:
@@ -250,7 +241,7 @@ async def _dash_text() -> str:
     from . import axiom_logs
     axiom_ips = await axiom_logs.fetch_unique_ip_count()
     axiom_ips_txt = f"{axiom_ips:,}" if axiom_ips else "—"
-    proto_line = f"🔌 WS: <b>{ipw}</b> · gRPC: <b>{ipg}</b> · Reality: <b>{ipr}</b> IP فعال"
+    proto_line = f"🔌 WS: <b>{ipw}</b> IP · gRPC: <b>{ipg}</b> IP متصل"
     return (
         "📊 <b>داشبورد لحظه‌ای</b>\n\n"
         f"⬇️ دانلود کل: <b>{_b(td)}</b>\n"

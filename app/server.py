@@ -366,38 +366,22 @@ def build_app() -> FastAPI:
             active_ips = len(state.ACTIVE_IPS)
             total_ips = len(state.IP_STATS)
             now = time.time()
-            online_ws = 0
-            online_grpc = 0
-            online_reality = 0
-            for uid, u in users:
-                if (now - state.LAST_ACTIVE.get(uid, 0)) >= config.ONLINE_WINDOW:
-                    continue
-                protos = u.get("protocols", [])
-                if "ws" in protos:
-                    online_ws += 1
-                if "grpc" in protos:
-                    online_grpc += 1
-                if "reality" in protos:
-                    online_reality += 1
-            # Count IPs actually connected per protocol from access logs
-            ip_ws = ip_grpc = ip_reality = 0
+            # Count IPs actually connected per protocol from nginx access logs
+            ip_ws = ip_grpc = 0
             for rec in state.IP_STATS.values():
                 if now - rec.get("last", 0) > config.ONLINE_WINDOW:
                     continue
                 pr = rec.get("proto", {})
                 if pr.get("ws"):
                     ip_ws += 1
-                if pr.get("grpc"):
+                elif pr.get("grpc"):
                     ip_grpc += 1
-                if not pr:
-                    ip_reality += 1
         sys = state.SYS
         return {
             "totals": {"up": tu, "down": td, "all": tu + td},
             "speed": {"up": sys["tx_bps"], "down": sys["rx_bps"]},
             "online": state.online_count(),
-            "online_proto": {"ws": online_ws, "grpc": online_grpc, "reality": online_reality},
-            "online_ips_proto": {"ws": ip_ws, "grpc": ip_grpc, "reality": ip_reality},
+            "online_proto": {"ws": ip_ws, "grpc": ip_grpc},
             "users": {
                 "total": len(users),
                 "active": active,
