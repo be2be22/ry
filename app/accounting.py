@@ -20,7 +20,7 @@ import time
 from . import config, state, engine, sysmetrics, axiom_logs
 
 _ACCEPTED_RE = re.compile(r" (\d+\.\d+\.\d+\.\d+):\d+ accepted ")
-_PROXY_LINE_RE = re.compile(r"^(\S+)\s+(/\S+)$")
+_PROXY_LINE_RE = re.compile(r"^(.+?)\s+(/\S+)$")
 
 
 def _is_cloudflare_ip(ip: str) -> bool:
@@ -96,6 +96,8 @@ def _extract_client_ip(line: str) -> str | None:
         return None
     ip = m.group(1)
     if ip == "127.0.0.1" or ip.startswith("100.64.") or ip == "-":
+        return None
+    if _is_cloudflare_ip(ip):
         return None
     return ip
 
