@@ -21,7 +21,6 @@ from . import config, state, engine, sysmetrics, axiom_logs
 
 _ACCEPTED_RE = re.compile(r" (\d+\.\d+\.\d+\.\d+):\d+ accepted ")
 _PROXY_LINE_RE = re.compile(r"^(.+?)\s+(/\S+)$")
-_GRPC_LINE_RE = re.compile(r"^(\S+)\s+(/\S+)\s+(\d+\.\d+)$")
 
 import ipaddress as _ipaddr
 _CF_NETS = tuple(
@@ -85,80 +84,6 @@ def _extract_client_ip(line: str) -> str | None:
     return ip
 
 
-def _parse_grpc_log(now: float, window: float) -> dict[str, int]:
-    """Read gRPC log, return fresh IPs with hit counts, purge old entries."""
-    path = config.GRPC_ACCESS_LOG
-    if not os.path.exists(path):
-        return {}
-    try:
-        size = os.path.getsize(path)
-        if size == 0:
-            return {}
-        cutoff = now - window
-        fresh: dict[str, int] = {}
-        kept: list[str] = []
-        with open(path, "r", errors="ignore") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                m = _GRPC_LINE_RE.match(line)
-                if not m:
-                    continue
-                ip, uri, ts_str = m.group(1), m.group(2), m.group(3)
-                if not ip or ip == "-" or "." not in ip:
-                    continue
-                try:
-                    ts = float(ts_str)
-                except ValueError:
-                    continue
-                if ts < cutoff:
-                    continue
-                if _is_cloudflare_ip(ip) or ip == "127.0.0.1":
-                    continue
-                fresh[ip] = fresh.get(ip, 0) + 1
-                kept.append(line)
-        with open(path, "w") as f:
-            for line in kept:
-                f.write(line + "\n")
-        return fresh
-    except Exception:
-        return {}
-    try:
-        size = os.path.getsize(path)
-        if size == 0:
-            return {}
-        cutoff = now - window
-        fresh: dict[str, int] = {}
-        kept: list[str] = []
-        with open(path, "r", errors="ignore") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                m = _GRPC_LINE_RE.match(line)
-                if not m:
-                    continue
-                ip, uri, ts_str = m.group(1), m.group(2), m.group(3)
-                try:
-                    ts = float(ts_str)
-                except ValueError:
-                    continue
-                if ts < cutoff:
-                    continue
-                if _is_cloudflare_ip(ip) or ip == "127.0.0.1":
-                    continue
-                fresh[ip] = fresh.get(ip, 0) + 1
-                kept.append(line)
-        # Rewrite with only fresh entries
-        with open(path, "w") as f:
-            for line in kept:
-                f.write(line + "\n")
-        return fresh
-    except Exception:
-        return {}
-
-
 def _evict_oldest_ip() -> None:
     """Evict the IP with the oldest 'last' timestamp when table is full."""
     if not state.IP_STATS:
@@ -205,14 +130,6 @@ def _parse_realtime_ips() -> None:
                 proto_seen.setdefault(ip, {})[proto] = (
                     proto_seen.get(ip, {}).get(proto, 0) + 1
                 )
-
-    # Dedicated gRPC log with timestamps — auto-expires old entries
-    grpc_hits = _parse_grpc_log(now, config.ONLINE_WINDOW)
-    for ip, hits in grpc_hits.items():
-        seen[ip] = seen.get(ip, 0) + hits
-        proto_seen.setdefault(ip, {})["grpc"] = (
-            proto_seen.get(ip, {}).get("grpc", 0) + hits
-        )
 
     if not seen:
         return

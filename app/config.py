@@ -96,7 +96,6 @@ STATS_FILE: str = str(Path(DATA_DIR) / "stats.json")
 CORE_CFG: str = str(Path(DATA_DIR) / "core.json")
 CORE_CFG_ACCESS_LOG: str = _env("CORE_CFG_ACCESS_LOG", str(Path(DATA_DIR) / "access.log"))
 PROXY_ACCESS_LOG: str = _env("PROXY_ACCESS_LOG", "/tmp/proxy_access.log")
-GRPC_ACCESS_LOG: str = _env("GRPC_ACCESS_LOG", "/tmp/grpc_access.log")
 
 # ── accounting loop ──────────────────────────────────────────────────
 SAMPLE_SECS: int = max(3, _int("SAMPLE_SECS", 10))
