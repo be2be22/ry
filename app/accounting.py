@@ -21,7 +21,6 @@ from . import config, state, engine, sysmetrics, axiom_logs
 
 _ACCEPTED_RE = re.compile(r" (\d+\.\d+\.\d+\.\d+):\d+ accepted ")
 _PROXY_LINE_RE = re.compile(r"^(.+?)\s+(/\S+)$")
-_proxy_log_size: int = 0
 
 import ipaddress as _ipaddr
 _CF_NETS = tuple(
@@ -114,31 +113,23 @@ def _parse_realtime_ips() -> None:
         if ip:
             seen[ip] = seen.get(ip, 0) + 1
 
-    # Nginx proxy log — only read when file has grown (new connections)
-    global _proxy_log_size
+    # Nginx proxy log — always read to keep active connections refreshed
     proto_seen: dict[str, dict[str, int]] = {}
-    try:
-        cur_size = os.path.getsize(config.PROXY_ACCESS_LOG) if os.path.exists(config.PROXY_ACCESS_LOG) else 0
-    except OSError:
-        cur_size = 0
-    if cur_size > _proxy_log_size:
-        _proxy_log_size = cur_size
-        for line in _read_log_tail(config.PROXY_ACCESS_LOG, config.IP_LOG_MAX_BYTES, truncate=True):
-            line = line.strip()
-            if not line:
+    for line in _read_log_tail(config.PROXY_ACCESS_LOG, config.IP_LOG_MAX_BYTES, truncate=False):
+        line = line.strip()
+        if not line:
+            continue
+        m = _PROXY_LINE_RE.match(line)
+        if m:
+            ip, uri = m.group(1).strip(), m.group(2)
+            if not ip or ip == "-" or _is_cloudflare_ip(ip):
                 continue
-            m = _PROXY_LINE_RE.match(line)
-            if m:
-                ip, uri = m.group(1).strip(), m.group(2)
-                if not ip or ip == "-" or _is_cloudflare_ip(ip):
-                    continue
-                seen[ip] = seen.get(ip, 0) + 1
-                proto = "ws" if "/ws" in uri else "grpc" if "/grpc" in uri else ""
-                if proto:
-                    proto_seen.setdefault(ip, {})[proto] = (
-                        proto_seen.get(ip, {}).get(proto, 0) + 1
-                    )
-        _proxy_log_size = 0
+            seen[ip] = seen.get(ip, 0) + 1
+            proto = "ws" if "/ws" in uri else "grpc" if "/grpc" in uri else ""
+            if proto:
+                proto_seen.setdefault(ip, {})[proto] = (
+                    proto_seen.get(ip, {}).get(proto, 0) + 1
+                )
 
     if not seen:
         return
