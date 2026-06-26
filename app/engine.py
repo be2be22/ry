@@ -257,16 +257,15 @@ def build_config() -> dict:
                     "statsUserUplink": True,
                     "statsUserDownlink": True,
                     "handshake": 4,        # Fail fast on bad clients
-                    # v3.6: Critical RAM savers for speed-test scenarios
-                    # bufferSize: Xray's internal per-connection buffer (MB).
-                    #   2MB supports ~50Mbps with 300ms RTT (covers most Iran users)
-                    #   without causing RAM spikes during speed tests.
-                    "bufferSize": 2,
-                    # connIdle: close idle connections after 60s (not too aggressive)
-                    "connIdle": 60,
-                    # uplinkOnly/downlinkOnly: half-closed connection timeout.
-                    "uplinkOnly": 15,
-                    "downlinkOnly": 15,
+                    # v3.7: Removed bufferSize limit (was 2MB, killed download speed).
+                    # Xray's default bufferSize is 0 (unlimited) which is correct —
+                    # the TCP kernel buffers (sysctl) already cap per-connection memory.
+                    # Adding a second cap here created double-throttling.
+                    # connIdle: close idle connections after 5 minutes (generous)
+                    "connIdle": 300,
+                    # uplinkOnly/downlinkOnly: 5 minutes (generous, was 15s — too aggressive)
+                    "uplinkOnly": 300,
+                    "downlinkOnly": 300,
                 }
             },
             "system": {
