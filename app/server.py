@@ -42,6 +42,7 @@ from . import (
     storage,
     subs,
     util,
+    ws_proxy,
 )
 from .schemas import (
     ChangePasswordRequest,
@@ -242,6 +243,9 @@ async def lifespan(app: FastAPI):
         _track(accounting.loop()),
         _track(_persist_loop()),
         _track(_session_gc_loop()),
+        # WS tracker proxy: sits between nginx and Xray on 127.0.0.1:18082.
+        # Logs real client IPs when WebSocket tunnels open (nginx only logs at close).
+        _track(ws_proxy.start()),
     ]
 
     if notify.enabled():
