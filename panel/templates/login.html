@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}ورود - پنل Xray{% endblock %}
+{% block content %}
+<div style="max-width: 400px; margin: 80px auto;">
+    <div class="card">
+        <h2 style="text-align: center; margin-bottom: 20px;">🔐 ورود به پنل</h2>
+        {% if error %}
+        <div class="alert alert-error">{{ error }}</div>
+        {% endif %}
+        <form method="POST" action="{{ url_for('login') }}">
+            <div class="form-group">
+                <label>نام کاربری</label>
+                <input type="text" name="username" required autofocus value="admin">
+            </div>
+            <div class="form-group">
+                <label>رمز عبور</label>
+                <input type="password" name="password" required>
+            </div>
+            <button type="submit" class="btn" style="width: 100%; padding: 12px;">ورود</button>
+        </form>
+    </div>
+    <p style="text-align: center; color: #b0b8c8; font-size: 12px; margin-top: 20px;">
+        پنل مدیریت Xray - نسخه ۱.۰
+    </p>
+</div>
+{% endblock %}

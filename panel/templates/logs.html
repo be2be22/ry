@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}لاگ‌های Xray{% endblock %}
+{% block content %}
+<div class="card">
+    <h2>📋 لاگ‌های Xray (زنده)</h2>
+    <div style="display: flex; gap: 10px; margin-bottom: 15px; flex-wrap: wrap;">
+        <a href="{{ url_for('view_logs', type='access', lines=lines) }}" class="btn {% if log_type == 'access' %}btn-success{% endif %}">Access Log</a>
+        <a href="{{ url_for('view_logs', type='error', lines=lines) }}" class="btn {% if log_type == 'error' %}btn-success{% endif %}">Error Log</a>
+        <div style="flex: 1; min-width: 150px;">
+            <form method="GET" action="{{ url_for('view_logs') }}" style="display: flex; gap: 5px;">
+                <input type="hidden" name="type" value="{{ log_type }}">
+                <input type="number" name="lines" value="{{ lines }}" min="10" max="1000" style="width: 100px;">
+                <button type="submit" class="btn">نمایش</button>
+            </form>
+        </div>
+        <label style="display: flex; align-items: center; gap: 5px; color: #b0b8c8;">
+            <input type="checkbox" id="live-toggle" {% if request.args.get('live') == '1' %}checked{% endif %} onchange="toggleLive()">
+            زنده (Live)
+        </label>
+        <button onclick="clearLog()" class="btn btn-danger">پاک کردن صفحه</button>
+    </div>
+
+    <pre id="log-content">{{ content }}</pre>
+
+    <div id="live-status" style="margin-top: 10px; color: #b0b8c8; font-size: 12px;"></div>
+</div>
+
+<script>
+let eventSource = null;
+
+function toggleLive() {
+    const checked = document.getElementById('live-toggle').checked;
+    const status = document.getElementById('live-status');
+    if (checked) {
+        const logType = '{{ log_type }}';
+        const url = '/api/logs/stream?type=' + logType;
+        eventSource = new EventSource(url);
+        status.innerHTML = '🔴 در حال پخش زنده...';
+        document.getElementById('log-content').innerHTML = '';
+
+        eventSource.onmessage = function(event) {
+            const pre = document.getElementById('log-content');
+            const line = document.createElement('div');
+            line.className = 'log-line';
+            // Color coding
+            if (event.data.includes('error') || event.data.includes('ERROR')) {
+                line.className += ' error';
+            } else if (event.data.includes('warn') || event.data.includes('WARN')) {
+                line.className += ' warn';
+            } else if (event.data.includes('info') || event.data.includes('INFO')) {
+                line.className += ' info';
+            }
+            line.textContent = event.data;
+            pre.appendChild(line);
+            pre.scrollTop = pre.scrollHeight;
+
+            // Limit to 1000 lines
+            while (pre.children.length > 1000) {
+                pre.removeChild(pre.firstChild);
+            }
+        };
+        eventSource.onerror = function() {
+            status.innerHTML = '⚠️ خطا در اتصال. تلاش مجدد...';
+        };
+    } else {
+        if (eventSource) {
+            eventSource.close();
+            eventSource = null;
+        }
+        status.innerHTML = '⏸️ متوقف شد';
+    }
+}
+
+function clearLog() {
+    document.getElementById('log-content').innerHTML = '';
+}
+
+// Auto-start live if requested
+{% if request.args.get('live') == '1' %}
+window.addEventListener('load', function() {
+    setTimeout(toggleLive, 500);
+});
+{% endif %}
+
+// Auto-scroll to bottom on load
+window.addEventListener('load', function() {
+    const pre = document.getElementById('log-content');
+    pre.scrollTop = pre.scrollHeight;
+});
+</script>
+{% endblock %}

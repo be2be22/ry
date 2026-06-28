@@ -1,10 +1,11 @@
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
+.Python
+*.egg-info
+.venv/
+venv/
 .env
 *.log
-/data/
-/state/
-*.local.json
 .DS_Store
-dist/

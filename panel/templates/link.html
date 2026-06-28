@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}لینک کانفیگ - {{ user.email }}{% endblock %}
+{% block content %}
+<div class="card">
+    <h2>🔗 لینک کانفیگ VLESS</h2>
+    <p>کاربر: <strong>{{ user.email }}</strong> ({{ user.name or '-' }})</p>
+
+    <div class="form-group">
+        <label>لینک VLESS (کپی کنید و در کلاینت وارد کنید):</label>
+        <div class="link-box" id="vless-link">{{ link }}</div>
+    </div>
+
+    <button onclick="copyLink()" class="btn">📋 کپی لینک</button>
+    <a href="v2rayng://install/{{ link | urlencode }}" class="btn btn-success">📥 افزودن به v2rayNG</a>
+    <a href="{{ url_for('dashboard') }}" class="btn btn-warning">بازگشت</a>
+
+    <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #2a3142;">
+        <h3 style="color: #4fc3f7; margin-bottom: 10px;">📋 جزئیات کانفیگ:</h3>
+        <table>
+            <tr><th>پروتکل</th><td>VLESS</td></tr>
+            <tr><th>انتقال</th><td>WebSocket (ws)</td></tr>
+            <tr><th>UUID</th><td style="font-family: monospace;">{{ user.uuid }}</td></tr>
+            <tr><th>آدرس سرور</th><td>{{ public_domain }}</td></tr>
+            <tr><th>پورت</th><td>443 (HTTPS)</td></tr>
+            <tr><th>مسیر (Path)</th><td>/vless</td></tr>
+            <tr><th>امنیت</th><td>TLS (توسط Cloudflare/Bunnyshell)</td></tr>
+            <tr><th>SNI / Host</th><td>{{ public_domain }}</td></tr>
+        </table>
+    </div>
+</div>
+
+<script>
+function copyLink() {
+    const link = document.getElementById('vless-link').innerText;
+    navigator.clipboard.writeText(link).then(() => {
+        alert('✅ لینک کپی شد!');
+    }).catch(() => {
+        // Fallback
+        const ta = document.createElement('textarea');
+        ta.value = link;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        alert('✅ لینک کپی شد!');
+    });
+}
+</script>
+{% endblock %}

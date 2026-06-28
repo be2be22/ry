@@ -1,1 +1,0 @@
-"""Aurora service layer package."""
