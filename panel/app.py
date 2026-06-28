@@ -148,6 +148,13 @@ def index():
     return redirect(url_for("login"))
 
 
+@app.route("/health")
+def health():
+    """Simple health check - no DB, no templates, no auth.
+    Used by entrypoint.sh to verify Flask is running."""
+    return "OK", 200
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":

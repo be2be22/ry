@@ -73,12 +73,13 @@ WAITED=0
 while [ $WAITED -lt $MAX_WAIT ]; do
     if ! kill -0 ${PANEL_PID} 2>/dev/null; then
         echo "[FATAL] Flask panel process died. Last log lines:"
-        tail -30 /var/log/xray/panel.log 2>/dev/null || echo "(no log file)"
+        tail -50 /var/log/xray/panel.log 2>/dev/null || echo "(no log file)"
         exit 1
     fi
-    # Test if Flask responds
-    if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:${PANEL_PORT:-5000}/ 2>/dev/null | grep -qE "^(200|302|401|403)$"; then
-        echo "[OK] Flask panel is responding (after ${WAITED}s)"
+    # Test if Flask responds on /health (simple endpoint, no DB needed)
+    HEALTH_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:${PANEL_PORT:-5000}/health 2>/dev/null)
+    if [ "$HEALTH_CODE" = "200" ]; then
+        echo "[OK] Flask panel is responding on /health (after ${WAITED}s)"
         break
     fi
     sleep 1
@@ -86,9 +87,10 @@ while [ $WAITED -lt $MAX_WAIT ]; do
 done
 
 if [ $WAITED -ge $MAX_WAIT ]; then
-    echo "[WARN] Flask panel did not respond within ${MAX_WAIT}s, but continuing anyway"
+    echo "[WARN] Flask panel did not respond within ${MAX_WAIT}s"
     echo "[INFO] Last panel log:"
-    tail -20 /var/log/xray/panel.log 2>/dev/null
+    tail -50 /var/log/xray/panel.log 2>/dev/null
+    echo "[INFO] Continuing anyway - Xray will return 404 for non-WS traffic"
 fi
 
 # ---------- Step 8: Trap signals for graceful shutdown ----------------------
