@@ -1,0 +1,1138 @@
+"""
+FastApiCloud WS Config Panel — Python Edition
+=============================================
+
+A single-file FastAPI app that:
+- Manages V2Ray/Xray WebSocket configs (VMess / VLESS / Trojan)
+- Runs Xray-core as a subprocess on the same host
+- Proxies WebSocket traffic from the public URL to the internal Xray
+- Generates share links + QR codes
+- Stores everything in a local SQLite database
+
+Deploy target: fastapicloud.com (or any Python PaaS / VPS).
+No external services, no separate database, no manual setup.
+
+Default admin: admin / admin123 (change after first login!)
+"""
+
+import os
+import sys
+import json
+import time
+import uuid
+import hmac
+import hashlib
+import secrets
+import sqlite3
+import asyncio
+import logging
+import platform
+import zipfile
+import io
+import base64
+import subprocess
+import urllib.request
+from pathlib import Path
+from datetime import datetime, timedelta
+from contextlib import asynccontextmanager
+from typing import Optional
+
+from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect, Depends, HTTPException, Query
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+import qrcode
+import uvicorn
+
+# ==============================================================================
+# Configuration
+# ==============================================================================
+
+BASE_DIR = Path(__file__).parent.resolve()
+DB_PATH = BASE_DIR / "data.db"
+XRAY_DIR = BASE_DIR / "xray-bin"
+XRAY_BIN = XRAY_DIR / "xray"
+XRAY_CONFIG_PATH = XRAY_DIR / "config.json"
+XRAY_LOG_PATH = XRAY_DIR / "xray.log"
+XRAY_PID_PATH = XRAY_DIR / "xray.pid"
+STATIC_DIR = BASE_DIR / "static"
+
+# Xray listens on localhost for each protocol on a separate port.
+# FastAPI proxies wss://public-host/ws/{proto} -> ws://127.0.0.1:{port}
+XRAY_PORTS = {"vmess": 8443, "vless": 8444, "trojan": 8445}
+
+# The public host clients connect to. Auto-detected from first request, or
+# override with PUBLIC_HOST env var.
+PUBLIC_HOST = os.environ.get("PUBLIC_HOST", "")
+PUBLIC_PORT = int(os.environ.get("PUBLIC_PORT", "443"))
+
+# Session secret — generated once and persisted in DB settings table
+SESSION_SECRET = os.environ.get("SESSION_SECRET", "")
+SESSION_MAX_AGE = 7 * 24 * 3600  # 7 days
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+log = logging.getLogger("fastapicloud")
+
+# ==============================================================================
+# Database
+# ==============================================================================
+
+def get_db():
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+
+def init_db():
+    XRAY_DIR.mkdir(exist_ok=True)
+    conn = get_db()
+    conn.executescript("""
+    CREATE TABLE IF NOT EXISTS admin (
+        id TEXT PRIMARY KEY,
+        username TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL,
+        email TEXT,
+        role TEXT DEFAULT 'admin',
+        created_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS server (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        host TEXT NOT NULL,
+        port INTEGER DEFAULT 443,
+        protocol TEXT DEFAULT 'ws',
+        remark TEXT,
+        location TEXT,
+        is_active INTEGER DEFAULT 1,
+        created_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS config (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        type TEXT DEFAULT 'vmess',
+        uuid TEXT NOT NULL,
+        server_id TEXT NOT NULL,
+        path TEXT DEFAULT '/',
+        host TEXT,
+        sni TEXT,
+        tls TEXT DEFAULT 'tls',
+        network TEXT DEFAULT 'ws',
+        port INTEGER DEFAULT 443,
+        flow TEXT,
+        status TEXT DEFAULT 'active',
+        upload_bytes INTEGER DEFAULT 0,
+        download_bytes INTEGER DEFAULT 0,
+        total_usage_bytes INTEGER DEFAULT 0,
+        expires_at TEXT,
+        assigned_user_id TEXT,
+        xray_active INTEGER DEFAULT 0,
+        created_at TEXT,
+        FOREIGN KEY (server_id) REFERENCES server(id) ON DELETE CASCADE,
+        FOREIGN KEY (assigned_user_id) REFERENCES user(id) ON DELETE SET NULL
+    );
+    CREATE TABLE IF NOT EXISTS user (
+        id TEXT PRIMARY KEY,
+        username TEXT UNIQUE NOT NULL,
+        email TEXT,
+        phone TEXT,
+        status TEXT DEFAULT 'active',
+        data_limit INTEGER DEFAULT 0,
+        data_used INTEGER DEFAULT 0,
+        expire_days INTEGER DEFAULT 30,
+        expires_at TEXT,
+        created_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS activity_log (
+        id TEXT PRIMARY KEY,
+        action TEXT,
+        entity TEXT,
+        entity_id TEXT,
+        detail TEXT,
+        admin_id TEXT,
+        created_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    );
+    """)
+    # Default admin
+    cur = conn.execute("SELECT COUNT(*) FROM admin")
+    if cur.fetchone()[0] == 0:
+        salt = secrets.token_hex(16)
+        hashed = hashlib.pbkdf2_hmac("sha256", b"admin123", salt.encode(), 100000).hex()
+        conn.execute(
+            "INSERT INTO admin (id, username, password, email, role, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (str(uuid.uuid4()), "admin", f"{salt}:{hashed}", "admin@fastapicloud.com", "admin", datetime.now().isoformat()),
+        )
+        log.info("Default admin created: admin / admin123")
+    # Session secret
+    global SESSION_SECRET
+    if not SESSION_SECRET:
+        cur = conn.execute("SELECT value FROM settings WHERE key = 'session_secret'")
+        row = cur.fetchone()
+        if row:
+            SESSION_SECRET = row["value"]
+        else:
+            SESSION_SECRET = secrets.token_hex(32)
+            conn.execute("INSERT INTO settings (key, value) VALUES ('session_secret', ?)", (SESSION_SECRET,))
+    # Default server (the local one)
+    cur = conn.execute("SELECT COUNT(*) FROM server")
+    if cur.fetchone()[0] == 0:
+        conn.execute(
+            "INSERT INTO server (id, name, host, port, protocol, location, remark, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (str(uuid.uuid4()), "FastApiCloud-Local", "fastapicloud.com", 443, "ws", "Local Server", "سرور محلی پنل", datetime.now().isoformat()),
+        )
+    conn.commit()
+    conn.close()
+
+
+# ==============================================================================
+# Password hashing
+# ==============================================================================
+
+def hash_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+    hashed = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100000).hex()
+    return f"{salt}:{hashed}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    try:
+        salt, hashed = stored.split(":")
+        return hmac.compare_digest(
+            hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100000).hex(),
+            hashed,
+        )
+    except Exception:
+        return False
+
+
+# ==============================================================================
+# Session
+# ==============================================================================
+
+def create_session(admin: dict) -> str:
+    payload = base64.urlsafe_b64encode(json.dumps({
+        "id": admin["id"],
+        "username": admin["username"],
+        "role": admin.get("role", "admin"),
+        "exp": int(time.time()) + SESSION_MAX_AGE,
+    }).encode()).decode()
+    sig = hmac.new(SESSION_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return f"{payload}.{sig}"
+
+
+def verify_session(token: str) -> Optional[dict]:
+    try:
+        payload, sig = token.rsplit(".", 1)
+        expected = hmac.new(SESSION_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, expected):
+            return None
+        data = json.loads(base64.urlsafe_b64decode(payload))
+        if data.get("exp", 0) < time.time():
+            return None
+        return data
+    except Exception:
+        return None
+
+
+def get_session_admin(request: Request) -> Optional[dict]:
+    token = request.cookies.get("fastapicloud_session")
+    if not token:
+        return None
+    return verify_session(token)
+
+
+def require_auth(request: Request) -> dict:
+    admin = get_session_admin(request)
+    if not admin:
+        raise HTTPException(status_code=401, detail="احراز هویت نشده‌اید")
+    return admin
+
+
+# ==============================================================================
+# Xray binary management
+# ==============================================================================
+
+def ensure_xray_binary():
+    """Download Xray-core binary if not present."""
+    if XRAY_BIN.exists():
+        return
+    XRAY_DIR.mkdir(exist_ok=True)
+    machine = platform.machine().lower()
+    if machine in ("x86_64", "amd64"):
+        arch = "64"
+    elif machine in ("aarch64", "arm64"):
+        arch = "arm64-v8a"
+    else:
+        log.warning(f"Unsupported arch: {machine}. Skipping Xray download.")
+        return
+    url = f"https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-{arch}.zip"
+    log.info(f"Downloading Xray from {url} ...")
+    try:
+        with urllib.request.urlopen(url, timeout=60) as resp:
+            data = resp.read()
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            with z.open("xray") as f:
+                XRAY_BIN.write_bytes(f.read())
+            XRAY_BIN.chmod(0o755)
+            for name in ("geoip.dat", "geosite.dat"):
+                try:
+                    with z.open(name) as f:
+                        (XRAY_DIR / name).write_bytes(f.read())
+                except KeyError:
+                    pass
+        log.info(f"Xray downloaded: {XRAY_BIN}")
+    except Exception as e:
+        log.error(f"Failed to download Xray: {e}")
+
+
+# ==============================================================================
+# Xray config generation
+# ==============================================================================
+
+def generate_xray_config() -> dict:
+    """Build the Xray config.json from active configs in DB."""
+    conn = get_db()
+    configs = [dict(r) for r in conn.execute("SELECT * FROM config WHERE status = 'active'").fetchall()]
+    conn.close()
+
+    by_type = {"vmess": [], "vless": [], "trojan": []}
+    for c in configs:
+        if c["type"] in by_type:
+            by_type[c["type"]].append(c)
+
+    inbounds = []
+    for proto, port in XRAY_PORTS.items():
+        clients = by_type.get(proto, [])
+        if not clients:
+            continue
+        if proto == "vmess":
+            client_list = [{"id": c["uuid"], "alterId": 0, "level": 0, "email": c["uuid"]} for c in clients]
+            settings = {"clients": client_list, "decryption": "none"}
+        elif proto == "vless":
+            client_list = [{"id": c["uuid"], "flow": c.get("flow") or "", "level": 0, "email": c["uuid"]} for c in clients]
+            settings = {"clients": client_list, "decryption": "none"}
+        else:  # trojan
+            client_list = [{"password": c["uuid"], "level": 0, "email": c["uuid"]} for c in clients]
+            settings = {"clients": client_list}
+
+        inbounds.append({
+            "tag": f"{proto}-ws",
+            "listen": "127.0.0.1",
+            "port": port,
+            "protocol": proto,
+            "settings": settings,
+            "streamSettings": {
+                "network": "ws",
+                "security": "none",  # TLS terminated by fastapicloud proxy
+                "wsSettings": {"path": f"/{proto}"},
+            },
+            "sniffing": {"enabled": True, "destOverride": ["http", "tls"]},
+        })
+
+    return {
+        "log": {"loglevel": "warning", "access": str(XRAY_DIR / "xray-access.log"), "error": str(XRAY_DIR / "xray-error.log")},
+        "inbounds": inbounds,
+        "outbounds": [
+            {"tag": "direct", "protocol": "freedom"},
+            {"tag": "block", "protocol": "blackhole"},
+        ],
+    }
+
+
+def write_xray_config():
+    config = generate_xray_config()
+    XRAY_CONFIG_PATH.write_text(json.dumps(config, indent=2))
+    return config
+
+
+# ==============================================================================
+# Xray process management
+# ==============================================================================
+
+_xray_proc: Optional[subprocess.Popen] = None
+
+
+def is_xray_running() -> bool:
+    global _xray_proc
+    if _xray_proc and _xray_proc.poll() is None:
+        return True
+    # Check PID file
+    if XRAY_PID_PATH.exists():
+        try:
+            pid = int(XRAY_PID_PATH.read_text().strip())
+            os.kill(pid, 0)
+            return True
+        except Exception:
+            XRAY_PID_PATH.unlink(missing_ok=True)
+    return False
+
+
+def get_xray_pid() -> Optional[int]:
+    global _xray_proc
+    if _xray_proc and _xray_proc.poll() is None:
+        return _xray_proc.pid
+    if XRAY_PID_PATH.exists():
+        try:
+            return int(XRAY_PID_PATH.read_text().strip())
+        except Exception:
+            pass
+    return None
+
+
+def start_xray() -> dict:
+    global _xray_proc
+    if is_xray_running():
+        return {"ok": False, "error": "Xray از قبل در حال اجراست", "pid": get_xray_pid()}
+    if not XRAY_BIN.exists():
+        return {"ok": False, "error": "فایل اجرایی Xray یافت نشد"}
+    try:
+        write_xray_config()
+    except Exception as e:
+        return {"ok": False, "error": f"خطا در تولید config: {e}"}
+    try:
+        log_fd = open(XRAY_LOG_PATH, "w")
+        _xray_proc = subprocess.Popen(
+            [str(XRAY_BIN), "run", "-c", str(XRAY_CONFIG_PATH)],
+            cwd=str(XRAY_DIR),
+            stdout=log_fd,
+            stderr=log_fd,
+            env={**os.environ, "XRAY_LOCATION_ASSET": str(XRAY_DIR)},
+        )
+        XRAY_PID_PATH.write_text(str(_xray_proc.pid))
+        time.sleep(1)
+        if _xray_proc.poll() is not None:
+            tail = read_log_tail(20)
+            return {"ok": False, "error": f"Xray بلافاصله بسته شد.\n{tail}"}
+        log.info(f"Xray started, PID={_xray_proc.pid}")
+        # Mark active configs
+        conn = get_db()
+        conn.execute("UPDATE config SET xray_active = 1 WHERE status = 'active'")
+        conn.commit()
+        conn.close()
+        return {"ok": True, "pid": _xray_proc.pid}
+    except Exception as e:
+        return {"ok": False, "error": f"خطا در اجرای Xray: {e}"}
+
+
+def stop_xray() -> dict:
+    global _xray_proc
+    pid = get_xray_pid()
+    if not pid:
+        return {"ok": False, "error": "Xray در حال اجرا نیست"}
+    try:
+        os.kill(pid, 15)  # SIGTERM
+        time.sleep(0.5)
+        try:
+            os.kill(pid, 9)  # SIGKILL if still alive
+        except ProcessLookupError:
+            pass
+    except Exception as e:
+        return {"ok": False, "error": f"خطا در توقف: {e}"}
+    _xray_proc = None
+    XRAY_PID_PATH.unlink(missing_ok=True)
+    conn = get_db()
+    conn.execute("UPDATE config SET xray_active = 0")
+    conn.commit()
+    conn.close()
+    log.info("Xray stopped")
+    return {"ok": True}
+
+
+def restart_xray() -> dict:
+    if is_xray_running():
+        stop_xray()
+        time.sleep(0.5)
+    return start_xray()
+
+
+def read_log_tail(lines: int = 50) -> str:
+    try:
+        content = XRAY_LOG_PATH.read_text(errors="replace")
+        return "\n".join(content.split("\n")[-lines:])
+    except Exception:
+        return "(log file not found)"
+
+
+def get_xray_status() -> dict:
+    running = is_xray_running()
+    conn = get_db()
+    client_count = conn.execute("SELECT COUNT(*) FROM config WHERE status = 'active'").fetchone()[0]
+    inbound_count = conn.execute("SELECT COUNT(DISTINCT type) FROM config WHERE status = 'active'").fetchone()[0]
+    conn.close()
+    return {
+        "running": running,
+        "pid": get_xray_pid() if running else None,
+        "public_host": PUBLIC_HOST or "(auto)",
+        "public_port": PUBLIC_PORT,
+        "client_count": client_count,
+        "inbound_count": inbound_count,
+        "xray_bin_exists": XRAY_BIN.exists(),
+    }
+
+
+# ==============================================================================
+# Share link generators
+# ==============================================================================
+
+def gen_vmess_link(c: dict, host: str, port: int) -> str:
+    obj = {
+        "v": "2", "ps": c["name"], "add": host, "port": str(port),
+        "id": c["uuid"], "aid": "0", "scy": "auto", "net": "ws",
+        "type": "none", "host": host, "path": c.get("path") or "/ws/vmess",
+        "tls": "tls", "sni": host,
+    }
+    return "vmess://" + base64.b64encode(json.dumps(obj).encode()).decode()
+
+
+def gen_vless_link(c: dict, host: str, port: int) -> str:
+    from urllib.parse import urlencode, quote
+    params = {
+        "encryption": "none", "type": "ws", "host": host,
+        "path": c.get("path") or "/ws/vless",
+        "security": "tls", "sni": host,
+    }
+    return f"vless://{c['uuid']}@{host}:{port}?{urlencode(params)}#{quote(c['name'])}"
+
+
+def gen_trojan_link(c: dict, host: str, port: int) -> str:
+    from urllib.parse import urlencode, quote
+    params = {"type": "ws", "host": host, "path": c.get("path") or "/ws/trojan", "security": "tls", "sni": host}
+    return f"trojan://{c['uuid']}@{host}:{port}?{urlencode(params)}#{quote(c['name'])}"
+
+
+def gen_share_link(c: dict, host: str, port: int) -> str:
+    t = c["type"]
+    if t == "vmess":
+        return gen_vmess_link(c, host, port)
+    if t == "vless":
+        return gen_vless_link(c, host, port)
+    if t == "trojan":
+        return gen_trojan_link(c, host, port)
+    return ""
+
+
+def get_public_host(request: Request) -> str:
+    global PUBLIC_HOST
+    if PUBLIC_HOST:
+        return PUBLIC_HOST
+    # Auto-detect from request
+    host = request.headers.get("host", "").split(":")[0]
+    if host and host != "localhost" and host != "127.0.0.1":
+        PUBLIC_HOST = host
+    return PUBLIC_HOST or host or "fastapicloud.com"
+
+
+# ==============================================================================
+# QR code
+# ==============================================================================
+
+def make_qr(text: str) -> bytes:
+    img = qrcode.make(text)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+# ==============================================================================
+# App
+# ==============================================================================
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    log.info("Starting FastApiCloud WS Config Panel...")
+    init_db()
+    ensure_xray_binary()
+    # Try to start Xray automatically
+    if XRAY_BIN.exists() and not is_xray_running():
+        r = start_xray()
+        if r["ok"]:
+            log.info("Xray auto-started")
+        else:
+            log.warning(f"Xray auto-start failed: {r.get('error')}")
+    yield
+    if is_xray_running():
+        stop_xray()
+
+
+app = FastAPI(title="FastApiCloud WS Panel", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
+)
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+# ==============================================================================
+# Frontend
+# ==============================================================================
+
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    if not STATIC_DIR.exists():
+        return HTMLResponse("<h1>static/index.html not found</h1>", status_code=500)
+    return HTMLResponse(STATIC_DIR.joinpath("index.html").read_text(encoding="utf-8"))
+
+
+# ==============================================================================
+# Auth API
+# ==============================================================================
+
+@app.post("/api/auth/login")
+async def login(request: Request):
+    body = await request.json()
+    username = body.get("username", "").strip()
+    password = body.get("password", "")
+    conn = get_db()
+    admin = conn.execute("SELECT * FROM admin WHERE username = ?", (username,)).fetchone()
+    conn.close()
+    if not admin or not verify_password(password, admin["password"]):
+        return JSONResponse({"ok": False, "error": "نام کاربری یا رمز عبور نادرست است"}, status_code=401)
+    token = create_session(dict(admin))
+    resp = JSONResponse({"ok": True, "admin": {"id": admin["id"], "username": admin["username"], "role": admin["role"]}})
+    resp.set_cookie("fastapicloud_session", token, httponly=True, samesite="lax", max_age=SESSION_MAX_AGE, path="/")
+    return resp
+
+
+@app.post("/api/auth/logout")
+async def logout():
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie("fastapicloud_session", path="/")
+    return resp
+
+
+@app.get("/api/auth/check")
+async def auth_check(request: Request):
+    admin = get_session_admin(request)
+    if not admin:
+        return {"ok": False, "admin": None}
+    return {"ok": True, "admin": admin}
+
+
+@app.post("/api/auth/password")
+async def change_password(request: Request):
+    admin = require_auth(request)
+    body = await request.json()
+    new_password = body.get("newPassword", "")
+    if len(new_password) < 6:
+        return JSONResponse({"ok": False, "error": "رمز جدید باید حداقل ۶ کاراکتر باشد"}, status_code=400)
+    conn = get_db()
+    conn.execute("UPDATE admin SET password = ? WHERE id = ?", (hash_password(new_password), admin["id"]))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+# ==============================================================================
+# Configs API
+# ==============================================================================
+
+@app.get("/api/configs")
+async def list_configs(request: Request, search: str = "", status: str = "", type: str = "", server_id: str = ""):
+    require_auth(request)
+    conn = get_db()
+    q = "SELECT c.*, s.name as server_name, s.host as server_host, s.port as server_port, u.username as user_username FROM config c LEFT JOIN server s ON c.server_id = s.id LEFT JOIN user u ON c.assigned_user_id = u.id WHERE 1=1"
+    params = []
+    if search:
+        q += " AND (c.name LIKE ? OR c.uuid LIKE ?)"
+        params += [f"%{search}%", f"%{search}%"]
+    if status:
+        q += " AND c.status = ?"
+        params.append(status)
+    if type:
+        q += " AND c.type = ?"
+        params.append(type)
+    if server_id:
+        q += " AND c.server_id = ?"
+        params.append(server_id)
+    q += " ORDER BY c.created_at DESC"
+    rows = [dict(r) for r in conn.execute(q, params).fetchall()]
+    conn.close()
+    return {"ok": True, "configs": rows}
+
+
+@app.post("/api/configs")
+async def create_config(request: Request):
+    admin = require_auth(request)
+    body = await request.json()
+    name = body.get("name")
+    server_id = body.get("serverId")
+    if not name or not server_id:
+        return JSONResponse({"ok": False, "error": "نام و سرور الزامی است"}, status_code=400)
+    conn = get_db()
+    server = conn.execute("SELECT * FROM server WHERE id = ?", (server_id,)).fetchone()
+    if not server:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "سرور یافت نشد"}, status_code=404)
+    config_id = str(uuid.uuid4())
+    config_uuid = body.get("uuid") or str(uuid.uuid4())
+    path = body.get("path") or f"/ws/{body.get('type', 'vmess')}"
+    now = datetime.now().isoformat()
+    conn.execute(
+        """INSERT INTO config (id, name, type, uuid, server_id, path, host, sni, tls, network, port, flow, status, expires_at, assigned_user_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            config_id, name, body.get("type", "vmess"), config_uuid, server_id,
+            path, body.get("host") or server["host"], body.get("sni") or body.get("host") or server["host"],
+            body.get("tls", "tls"), body.get("network", "ws"), body.get("port") or server["port"],
+            body.get("flow"), body.get("status", "active"),
+            body.get("expiresAt") or None, body.get("assignedUserId") or None, now,
+        ),
+    )
+    conn.execute(
+        "INSERT INTO activity_log (id, action, entity, entity_id, detail, admin_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (str(uuid.uuid4()), "create", "config", config_id, f"ساخت کانفیگ {name}", admin["id"], now),
+    )
+    conn.commit()
+    conn.close()
+    # Reload Xray if running
+    xray_reloaded = False
+    if is_xray_running():
+        write_xray_config()
+        xray_reloaded = True
+    return {"ok": True, "configId": config_id, "xrayReloaded": xray_reloaded}
+
+
+@app.get("/api/configs/{config_id}")
+async def get_config(request: Request, config_id: str):
+    require_auth(request)
+    host = get_public_host(request)
+    conn = get_db()
+    c = conn.execute("SELECT * FROM config WHERE id = ?", (config_id,)).fetchone()
+    conn.close()
+    if not c:
+        return JSONResponse({"ok": False, "error": "کانفیگ یافت نشد"}, status_code=404)
+    c = dict(c)
+    share_link = gen_share_link(c, host, PUBLIC_PORT)
+    return {"ok": True, "config": c, "shareLink": share_link}
+
+
+@app.put("/api/configs/{config_id}")
+async def update_config(request: Request, config_id: str):
+    admin = require_auth(request)
+    body = await request.json()
+    conn = get_db()
+    existing = conn.execute("SELECT * FROM config WHERE id = ?", (config_id,)).fetchone()
+    if not existing:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "کانفیگ یافت نشد"}, status_code=404)
+    updates = {}
+    for field in ("name", "type", "server_id", "path", "host", "sni", "tls", "network", "port", "flow", "status", "uuid", "assigned_user_id"):
+        if field in body:
+            val = body[field]
+            if field in ("port",):
+                val = int(val) if val else 443
+            if field in ("assigned_user_id",) and not val:
+                val = None
+            updates[field] = val
+    if "expiresAt" in body:
+        updates["expires_at"] = body["expiresAt"] or None
+    if updates:
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        conn.execute(f"UPDATE config SET {set_clause} WHERE id = ?", list(updates.values()) + [config_id])
+    conn.execute(
+        "INSERT INTO activity_log (id, action, entity, entity_id, detail, admin_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (str(uuid.uuid4()), "update", "config", config_id, f"ویرایش کانفیگ {body.get('name', existing['name'])}", admin["id"], datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+    if is_xray_running():
+        write_xray_config()
+    return {"ok": True}
+
+
+@app.delete("/api/configs/{config_id}")
+async def delete_config(request: Request, config_id: str):
+    admin = require_auth(request)
+    conn = get_db()
+    c = conn.execute("SELECT * FROM config WHERE id = ?", (config_id,)).fetchone()
+    if not c:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "کانفیگ یافت نشد"}, status_code=404)
+    conn.execute("DELETE FROM config WHERE id = ?", (config_id,))
+    conn.execute(
+        "INSERT INTO activity_log (id, action, entity, entity_id, detail, admin_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (str(uuid.uuid4()), "delete", "config", config_id, f"حذف کانفیگ {c['name']}", admin["id"], datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+    if is_xray_running():
+        write_xray_config()
+    return {"ok": True}
+
+
+# ==============================================================================
+# Servers API
+# ==============================================================================
+
+@app.get("/api/servers")
+async def list_servers(request: Request):
+    require_auth(request)
+    conn = get_db()
+    rows = [dict(r) for r in conn.execute("SELECT s.*, (SELECT COUNT(*) FROM config c WHERE c.server_id = s.id) as config_count FROM server s ORDER BY s.created_at DESC").fetchall()]
+    conn.close()
+    return {"ok": True, "servers": rows}
+
+
+@app.post("/api/servers")
+async def create_server(request: Request):
+    admin = require_auth(request)
+    body = await request.json()
+    if not body.get("name") or not body.get("host"):
+        return JSONResponse({"ok": False, "error": "نام و آدرس سرور الزامی است"}, status_code=400)
+    sid = str(uuid.uuid4())
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO server (id, name, host, port, protocol, remark, location, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (sid, body["name"], body["host"], int(body.get("port", 443)), body.get("protocol", "ws"),
+         body.get("remark"), body.get("location"), datetime.now().isoformat()),
+    )
+    conn.execute(
+        "INSERT INTO activity_log (id, action, entity, entity_id, detail, admin_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (str(uuid.uuid4()), "create", "server", sid, f"افزودن سرور {body['name']}", admin["id"], datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "serverId": sid}
+
+
+@app.put("/api/servers/{server_id}")
+async def update_server(request: Request, server_id: str):
+    admin = require_auth(request)
+    body = await request.json()
+    conn = get_db()
+    existing = conn.execute("SELECT * FROM server WHERE id = ?", (server_id,)).fetchone()
+    if not existing:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "سرور یافت نشد"}, status_code=404)
+    updates = {}
+    for field in ("name", "host", "port", "protocol", "remark", "location", "is_active"):
+        if field in body:
+            val = body[field]
+            if field == "port":
+                val = int(val) if val else 443
+            if field == "is_active":
+                val = 1 if val else 0
+            updates[field] = val
+    if updates:
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        conn.execute(f"UPDATE server SET {set_clause} WHERE id = ?", list(updates.values()) + [server_id])
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+@app.delete("/api/servers/{server_id}")
+async def delete_server(request: Request, server_id: str):
+    admin = require_auth(request)
+    conn = get_db()
+    count = conn.execute("SELECT COUNT(*) FROM config WHERE server_id = ?", (server_id,)).fetchone()[0]
+    if count > 0:
+        conn.close()
+        return JSONResponse({"ok": False, "error": f"این سرور {count} کانفیگ دارد"}, status_code=400)
+    conn.execute("DELETE FROM server WHERE id = ?", (server_id,))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+# ==============================================================================
+# Users API
+# ==============================================================================
+
+@app.get("/api/users")
+async def list_users(request: Request):
+    require_auth(request)
+    conn = get_db()
+    rows = [dict(r) for r in conn.execute("SELECT u.*, (SELECT COUNT(*) FROM config c WHERE c.assigned_user_id = u.id) as config_count FROM user u ORDER BY u.created_at DESC").fetchall()]
+    conn.close()
+    return {"ok": True, "users": rows}
+
+
+@app.post("/api/users")
+async def create_user(request: Request):
+    admin = require_auth(request)
+    body = await request.json()
+    if not body.get("username"):
+        return JSONResponse({"ok": False, "error": "نام کاربری الزامی است"}, status_code=400)
+    uid = str(uuid.uuid4())
+    expire_days = int(body.get("expireDays", 30))
+    expires_at = (datetime.now() + timedelta(days=expire_days)).isoformat() if expire_days > 0 else None
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO user (id, username, email, phone, status, data_limit, expire_days, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (uid, body["username"], body.get("email"), body.get("phone"), body.get("status", "active"),
+             int(body.get("dataLimit", 0)), expire_days, expires_at, datetime.now().isoformat()),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "این نام کاربری قبلا ثبت شده است"}, status_code=400)
+    conn.close()
+    return {"ok": True, "userId": uid}
+
+
+@app.put("/api/users/{user_id}")
+async def update_user(request: Request, user_id: str):
+    admin = require_auth(request)
+    body = await request.json()
+    conn = get_db()
+    existing = conn.execute("SELECT * FROM user WHERE id = ?", (user_id,)).fetchone()
+    if not existing:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "کاربر یافت نشد"}, status_code=404)
+    updates = {}
+    for field in ("username", "email", "phone", "status", "data_limit", "data_used", "expire_days"):
+        if field in body:
+            val = body[field]
+            if field in ("data_limit", "data_used", "expire_days"):
+                val = int(val) if val else 0
+            updates[field] = val
+    if "expireDays" in body:
+        ed = int(body["expireDays"])
+        updates["expire_days"] = ed
+        updates["expires_at"] = (datetime.now() + timedelta(days=ed)).isoformat() if ed > 0 else None
+    if updates:
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        conn.execute(f"UPDATE user SET {set_clause} WHERE id = ?", list(updates.values()) + [user_id])
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+@app.delete("/api/users/{user_id}")
+async def delete_user(request: Request, user_id: str):
+    admin = require_auth(request)
+    conn = get_db()
+    conn.execute("DELETE FROM user WHERE id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+# ==============================================================================
+# Xray API
+# ==============================================================================
+
+@app.get("/api/xray/status")
+async def xray_status(request: Request):
+    require_auth(request)
+    return {"ok": True, "status": get_xray_status()}
+
+
+@app.post("/api/xray/start")
+async def xray_start(request: Request):
+    admin = require_auth(request)
+    r = start_xray()
+    if r["ok"]:
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO activity_log (id, action, entity, detail, admin_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (str(uuid.uuid4()), "xray_start", "system", f"اجرای Xray (PID: {r['pid']})", admin["id"], datetime.now().isoformat()),
+        )
+        conn.commit()
+        conn.close()
+    return r
+
+
+@app.post("/api/xray/stop")
+async def xray_stop(request: Request):
+    admin = require_auth(request)
+    r = stop_xray()
+    if r["ok"]:
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO activity_log (id, action, entity, detail, admin_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (str(uuid.uuid4()), "xray_stop", "system", "توقف Xray", admin["id"], datetime.now().isoformat()),
+        )
+        conn.commit()
+        conn.close()
+    return r
+
+
+@app.post("/api/xray/restart")
+async def xray_restart(request: Request):
+    admin = require_auth(request)
+    r = restart_xray()
+    if r["ok"]:
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO activity_log (id, action, entity, detail, admin_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (str(uuid.uuid4()), "xray_restart", "system", f"Restart Xray (PID: {r['pid']})", admin["id"], datetime.now().isoformat()),
+        )
+        conn.commit()
+        conn.close()
+    return r
+
+
+@app.get("/api/xray/config")
+async def xray_config(request: Request):
+    require_auth(request)
+    config = generate_xray_config()
+    return {"ok": True, "config": config, "path": str(XRAY_CONFIG_PATH)}
+
+
+@app.get("/api/xray/logs")
+async def xray_logs(request: Request, lines: int = 100):
+    require_auth(request)
+    return {"ok": True, "content": read_log_tail(lines)}
+
+
+# ==============================================================================
+# QR Code
+# ==============================================================================
+
+@app.get("/api/qr")
+async def qr_code(request: Request, id: str = "", text: str = ""):
+    require_auth(request)
+    host = get_public_host(request)
+    content = text
+    if id:
+        conn = get_db()
+        c = conn.execute("SELECT * FROM config WHERE id = ?", (id,)).fetchone()
+        conn.close()
+        if not c:
+            return JSONResponse({"ok": False, "error": "کانفیگ یافت نشد"}, status_code=404)
+        content = gen_share_link(dict(c), host, PUBLIC_PORT)
+    if not content:
+        return JSONResponse({"ok": False, "error": "متن یا شناسه ارسال نشده"}, status_code=400)
+    png = make_qr(content)
+    return Response(content=png, media_type="image/png")
+
+
+# ==============================================================================
+# Stats API
+# ==============================================================================
+
+@app.get("/api/stats")
+async def stats(request: Request):
+    require_auth(request)
+    conn = get_db()
+    total_configs = conn.execute("SELECT COUNT(*) FROM config").fetchone()[0]
+    active_configs = conn.execute("SELECT COUNT(*) FROM config WHERE status = 'active'").fetchone()[0]
+    total_servers = conn.execute("SELECT COUNT(*) FROM server").fetchone()[0]
+    total_users = conn.execute("SELECT COUNT(*) FROM user").fetchone()[0]
+    by_type = {r["type"]: r["c"] for r in conn.execute("SELECT type, COUNT(*) as c FROM config GROUP BY type").fetchall()}
+    recent_logs = [dict(r) for r in conn.execute("SELECT * FROM activity_log ORDER BY created_at DESC LIMIT 10").fetchall()]
+    conn.close()
+    return {
+        "ok": True,
+        "stats": {
+            "configs": {"total": total_configs, "active": active_configs},
+            "servers": {"total": total_servers},
+            "users": {"total": total_users},
+            "byType": by_type,
+            "xray": get_xray_status(),
+            "recentLogs": recent_logs,
+        },
+    }
+
+
+# ==============================================================================
+# Seed data
+# ==============================================================================
+
+@app.post("/api/seed")
+async def seed_data(request: Request):
+    admin = require_auth(request)
+    conn = get_db()
+    if conn.execute("SELECT COUNT(*) FROM config").fetchone()[0] > 0:
+        conn.close()
+        return {"ok": True, "message": "داده‌های نمونه قبلاً ایجاد شده‌اند"}
+    # Get or create default server
+    server = conn.execute("SELECT * FROM server LIMIT 1").fetchone()
+    if not server:
+        sid = str(uuid.uuid4())
+        conn.execute("INSERT INTO server (id, name, host, port, created_at) VALUES (?, ?, ?, ?, ?)",
+                     (sid, "FastApiCloud-Local", "fastapicloud.com", 443, datetime.now().isoformat()))
+        server = conn.execute("SELECT * FROM server WHERE id = ?", (sid,)).fetchone()
+    # Create sample configs
+    for proto in ("vmess", "vless", "trojan"):
+        conn.execute(
+            "INSERT INTO config (id, name, type, uuid, server_id, path, host, sni, tls, network, port, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (str(uuid.uuid4()), f"sample-{proto}", proto, str(uuid.uuid4()), server["id"],
+             f"/ws/{proto}", server["host"], server["host"], "tls", "ws", 443, "active", datetime.now().isoformat()),
+        )
+    conn.execute(
+        "INSERT INTO activity_log (id, action, entity, detail, admin_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (str(uuid.uuid4()), "seed", "system", "ایجاد داده‌های نمونه", admin["id"], datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+    if is_xray_running():
+        write_xray_config()
+    return {"ok": True, "message": "داده‌های نمونه ایجاد شدند"}
+
+
+# ==============================================================================
+# WebSocket proxy: /ws/{proto} -> ws://127.0.0.1:{port}
+# ==============================================================================
+
+@app.websocket("/ws/{proto}")
+async def ws_proxy(ws: WebSocket, proto: str):
+    """Proxy WebSocket traffic from public URL to internal Xray."""
+    if proto not in XRAY_PORTS:
+        await ws.close(code=1008, reason="Invalid protocol")
+        return
+    if not is_xray_running():
+        await ws.close(code=1011, reason="Xray is not running")
+        return
+    try:
+        import websockets
+    except ImportError:
+        await ws.close(code=1011, reason="websockets library not installed")
+        return
+
+    await ws.accept()
+    xray_url = f"ws://127.0.0.1:{XRAY_PORTS[proto]}/{proto}"
+    xray_ws = None
+    try:
+        xray_ws = await websockets.connect(xray_url, max_size=None)
+    except Exception as e:
+        log.error(f"Failed to connect to Xray at {xray_url}: {e}")
+        await ws.close(code=1011, reason="Cannot connect to Xray")
+        return
+
+    async def client_to_xray():
+        try:
+            while True:
+                data = await ws.receive_bytes()
+                await xray_ws.send(data)
+        except WebSocketDisconnect:
+            pass
+        except Exception:
+            pass
+
+    async def xray_to_client():
+        try:
+            while True:
+                data = await xray_ws.recv()
+                if isinstance(data, str):
+                    await ws.send_text(data)
+                else:
+                    await ws.send_bytes(data)
+        except Exception:
+            pass
+
+    await asyncio.gather(client_to_xray(), xray_to_client(), return_exceptions=True)
+    try:
+        await xray_ws.close()
+    except Exception:
+        pass
+    try:
+        await ws.close()
+    except Exception:
+        pass
+
+
+# ==============================================================================
+# Main
+# ==============================================================================
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
