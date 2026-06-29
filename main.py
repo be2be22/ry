@@ -1,16 +1,15 @@
 """
-FastApiCloud WS Config Panel — Python Edition v4 (FastAPI + aiohttp client)
-==========================================================================
+FastApiCloud WS Config Panel — Python Edition v5 (FastAPI + aiohttp, NO gRPC)
+============================================================================
 
-Uses FastAPI as the main framework (so fastapicloud.com's `fastapi run` works)
-but uses aiohttp's WebSocketClientSession for the proxy connection to Xray
-(faster than the `websockets` library for high-throughput proxying).
+NO gRPC/protobuf dependency — works on Python 3.14+ without compatibility issues.
+Traffic stats are read from Xray's access log instead of gRPC.
 
 Architecture:
 - FastAPI app on PORT (for HTTP API + WebSocket server)
 - Xray-core subprocess on localhost ports (8443/8444/8445)
 - /ws/{proto} → FastAPI WebSocket → aiohttp client → Xray (FAST!)
-- gRPC QueryStats for real-time traffic stats
+- Traffic stats from Xray access log (parsed periodically)
 """
 
 import os
@@ -31,6 +30,7 @@ import base64
 import subprocess
 import urllib.request
 import threading
+import re
 from pathlib import Path
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
@@ -43,11 +43,6 @@ from fastapi.middleware.cors import CORSMiddleware
 import aiohttp
 import qrcode
 import uvicorn
-import grpc
-
-# Xray gRPC generated code
-sys.path.insert(0, str(Path(__file__).parent.resolve()))
-from xray_grpc import stats_pb2, stats_pb2_grpc
 
 # ==============================================================================
 # Configuration
@@ -79,7 +74,7 @@ XRAY_PID_PATH = XRAY_DIR / "xray.pid"
 STATIC_DIR = BASE_DIR / "static"
 
 XRAY_PORTS = {"vmess": 8443, "vless": 8444, "trojan": 8445}
-XRAY_API_PORT = 15490
+XRAY_ACCESS_LOG = XRAY_DIR / "xray-access.log"
 
 PUBLIC_HOST = os.environ.get("PUBLIC_HOST", "")
 PUBLIC_PORT = int(os.environ.get("PUBLIC_PORT", "443"))
@@ -212,10 +207,7 @@ def generate_xray_config() -> dict:
     by_type = {"vmess": [], "vless": [], "trojan": []}
     for c in configs:
         if c["type"] in by_type: by_type[c["type"]].append(c)
-    inbounds = [{
-        "tag": "api", "listen": "127.0.0.1", "port": XRAY_API_PORT,
-        "protocol": "dokodemo-door", "settings": {"address": "127.0.0.1"},
-    }]
+    inbounds = []
     for proto, port in XRAY_PORTS.items():
         clients = by_type.get(proto, [])
         if proto == "vmess":
@@ -232,10 +224,6 @@ def generate_xray_config() -> dict:
         })
     return {
         "log": {"loglevel": "warning", "access": str(XRAY_DIR / "xray-access.log"), "error": str(XRAY_DIR / "xray-error.log")},
-        "api": {"tag": "api", "services": ["HandlerService", "StatsService", "LoggerService"]},
-        "stats": {},
-        "policy": {"levels": {"0": {"statsUserUplink": True, "statsUserDownlink": True}}, "system": {"statsInboundUplink": True, "statsInboundDownlink": True}},
-        "routing": {"domainStrategy": "AsIs", "rules": [{"type": "field", "inboundTag": ["api"], "outboundTag": "api"}]},
         "inbounds": inbounds,
         "outbounds": [{"tag": "direct", "protocol": "freedom"}, {"tag": "block", "protocol": "blackhole"}],
     }
@@ -352,33 +340,90 @@ def _do_reload():
     except Exception as e: log.error(f"Reload error: {e}")
 
 # ==============================================================================
-# gRPC stats
+# Traffic stats from Xray access log
 # ==============================================================================
 
-_grpc_channel = None
+# Xray access log format (when loglevel is "warning" with access log):
+# Each line contains: timestamp, inbound tag, from, to, and traffic info
+# We parse the email/UUID field and accumulated bytes.
+# Format: YYYY/MM/DD HH:MM:SS [tag] from  accepted  email:UUID  [inboundTag]
+#         network:tcp type:tcp host:domain  path:/ws/vmess  traffic:uplink → 1234, downlink → 5678
 
-def get_grpc_channel():
-    global _grpc_channel
-    if _grpc_channel is None: _grpc_channel = grpc.insecure_channel(f"127.0.0.1:{XRAY_API_PORT}")
-    return _grpc_channel
+_log_position = 0  # Track how much of the log we've already parsed
 
-def grpc_query_all_stats():
-    if not is_xray_running(): return {"ok": False, "stats": {}}
+def parse_access_log_for_stats() -> dict:
+    """Parse Xray access log to extract per-user traffic stats.
+    
+    Xray access log lines look like:
+    2026/06/29 20:00:00 127.0.0.1:12345 accepted //vmess-ws [vmess-ws] email: user@uuid
+    The traffic is logged when the connection closes.
+    
+    Returns: {uuid: {"uplink": int, "downlink": int}}
+    """
+    global _log_position
+    stats = {}
+    if not XRAY_ACCESS_LOG.exists():
+        return stats
     try:
-        stub = stats_pb2_grpc.StatsServiceStub(get_grpc_channel())
-        resp = stub.QueryStats(stats_pb2.QueryStatsRequest(pattern="user>>>", reset=False), timeout=5)
-        stats = {}
-        for s in resp.stat:
-            parts = s.name.split(">>>")
-            if len(parts) != 4: continue
-            email, direction = parts[1], parts[3]
-            if email not in stats: stats[email] = {"uplink": 0, "downlink": 0}
-            if direction == "uplink": stats[email]["uplink"] = s.value
-            elif direction == "downlink": stats[email]["downlink"] = s.value
-        return {"ok": True, "stats": stats}
+        size = XRAY_ACCESS_LOG.stat().st_size
+        # If log was rotated/reset, start from beginning
+        if _log_position > size:
+            _log_position = 0
+        with open(XRAY_ACCESS_LOG, "r", errors="replace") as f:
+            f.seek(_log_position)
+            new_data = f.read()
+            _log_position = f.tell()
+        # Parse each line for traffic info
+        for line in new_data.split("\n"):
+            # Look for email: pattern (UUID is used as email)
+            # Format: ... email: xxx-xxx-xxx-xxx ... traffic: uplink → 1234, downlink → 5678
+            email_match = re.search(r"email:\s*([a-f0-9\-]{36})", line)
+            if not email_match:
+                continue
+            uuid = email_match.group(1)
+            # Look for traffic info: "traffic: uplink → 1234, downlink → 5678" or "from 127.0.0.1: ... to ... : 1234 B"
+            # Xray logs: "from ... to ... accepted ..." then later "traffic: uplink → X, downlink → Y"
+            up_match = re.search(r"uplink\s*[→>:]\s*(\d+)", line)
+            down_match = re.search(r"downlink\s*[→>:]\s*(\d+)", line)
+            if up_match or down_match:
+                if uuid not in stats:
+                    stats[uuid] = {"uplink": 0, "downlink": 0}
+                if up_match:
+                    stats[uuid]["uplink"] += int(up_match.group(1))
+                if down_match:
+                    stats[uuid]["downlink"] += int(down_match.group(1))
+        return stats
     except Exception as e:
-        log.error(f"gRPC QueryStats failed: {e}")
-        return {"ok": False, "stats": {}}
+        log.debug(f"Access log parse error: {e}")
+        return {}
+
+
+def get_traffic_stats() -> dict:
+    """Get aggregated traffic stats from access log + DB."""
+    log_stats = parse_access_log_for_stats()
+    conn = get_db()
+    configs = [dict(r) for r in conn.execute("SELECT * FROM config WHERE status = 'active'").fetchall()]
+    # Update DB with new stats from log
+    for c in configs:
+        uuid = c["uuid"]
+        if uuid in log_stats:
+            up = log_stats[uuid]["uplink"]
+            down = log_stats[uuid]["downlink"]
+            # Accumulate (add to existing DB values since log may rotate)
+            new_up = c.get("upload_bytes", 0) + up
+            new_down = c.get("download_bytes", 0) + down
+            conn.execute(
+                "UPDATE config SET upload_bytes = ?, download_bytes = ?, total_usage_bytes = ? WHERE id = ?",
+                (new_up, new_down, new_up + new_down, c["id"])
+            )
+    conn.commit()
+    # Now get totals from DB
+    configs = [dict(r) for r in conn.execute("SELECT * FROM config WHERE status = 'active'").fetchall()]
+    conn.close()
+    total_up = sum(c.get("upload_bytes", 0) for c in configs)
+    total_down = sum(c.get("download_bytes", 0) for c in configs)
+    total = sum(c.get("total_usage_bytes", 0) for c in configs)
+    return {"upload": total_up, "download": total_down, "total": total}
 
 # ==============================================================================
 # Share links & QR
@@ -654,24 +699,12 @@ async def stats(request: Request):
     active = conn.execute("SELECT COUNT(*) FROM config WHERE status = 'active'").fetchone()[0]
     by_type = {r["type"]: r["c"] for r in conn.execute("SELECT type, COUNT(*) as c FROM config GROUP BY type").fetchall()}
     logs = [dict(r) for r in conn.execute("SELECT * FROM activity_log ORDER BY created_at DESC LIMIT 5").fetchall()]
-    configs = [dict(r) for r in conn.execute("SELECT * FROM config WHERE status = 'active'").fetchall()]
     conn.close()
-    ts = grpc_query_all_stats()
-    up = down = total_tr = 0
-    if ts["ok"]:
-        conn = get_db()
-        for c in configs:
-            if c["uuid"] in ts["stats"]:
-                u = ts["stats"][c["uuid"]]["uplink"]; d = ts["stats"][c["uuid"]]["downlink"]
-                up += u; down += d; total_tr += u + d
-                conn.execute("UPDATE config SET upload_bytes=?, download_bytes=?, total_usage_bytes=? WHERE id=?", (u, d, u+d, c["id"]))
-        conn.commit(); conn.close()
-    else:
-        for c in configs:
-            up += c.get("upload_bytes", 0); down += c.get("download_bytes", 0); total_tr += c.get("total_usage_bytes", 0)
+    # Get traffic stats from access log (no gRPC needed)
+    traffic = get_traffic_stats()
     return {"ok": True, "stats": {
         "configs": {"total": total, "active": active}, "byType": by_type,
-        "traffic": {"upload": up, "download": down, "total": total_tr},
+        "traffic": traffic,
         "xray": get_xray_status(), "recentLogs": logs}}
 
 @app.post("/api/seed")
