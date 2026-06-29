@@ -236,14 +236,15 @@ def verify_password(password: str, stored: str) -> bool:
 # ==============================================================================
 
 def create_session(admin: dict) -> str:
+    """Create a URL-safe session token (no special chars that need quoting)."""
     payload = base64.urlsafe_b64encode(json.dumps({
         "id": admin["id"],
         "username": admin["username"],
         "role": admin.get("role", "admin"),
         "exp": int(time.time()) + SESSION_MAX_AGE,
-    }).encode()).decode()
+    }).encode()).decode().rstrip("=")  # strip padding to avoid = in cookie
     sig = hmac.new(SESSION_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
-    return f"{payload}.{sig}"
+    return f"{payload}.{sig}"  # only alphanum + . — safe for cookie without quotes
 
 
 def verify_session(token: str) -> Optional[dict]:
@@ -252,6 +253,10 @@ def verify_session(token: str) -> Optional[dict]:
         expected = hmac.new(SESSION_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(sig, expected):
             return None
+        # Re-add padding for urlsafe_b64decode
+        padding = 4 - (len(payload) % 4)
+        if padding != 4:
+            payload += "=" * padding
         data = json.loads(base64.urlsafe_b64decode(payload))
         if data.get("exp", 0) < time.time():
             return None
@@ -350,7 +355,7 @@ def generate_xray_config() -> dict:
             "streamSettings": {
                 "network": "ws",
                 "security": "none",  # TLS terminated by fastapicloud proxy
-                "wsSettings": {"path": f"/{proto}"},
+                "wsSettings": {"path": f"/ws/{proto}"},
             },
             "sniffing": {"enabled": True, "destOverride": ["http", "tls"]},
         })
@@ -407,6 +412,8 @@ def get_xray_pid() -> Optional[int]:
 
 def start_xray() -> dict:
     global _xray_proc
+    # Check if a stale Xray process is still holding the ports — if so, kill it first
+    _kill_orphaned_xray_processes()
     if is_xray_running():
         return {"ok": False, "error": "Xray از قبل در حال اجراست", "pid": get_xray_pid()}
     if not XRAY_BIN.exists():
@@ -425,7 +432,7 @@ def start_xray() -> dict:
             env={**os.environ, "XRAY_LOCATION_ASSET": str(XRAY_DIR)},
         )
         XRAY_PID_PATH.write_text(str(_xray_proc.pid))
-        time.sleep(1)
+        time.sleep(1.5)
         if _xray_proc.poll() is not None:
             tail = read_log_tail(20)
             return {"ok": False, "error": f"Xray بلافاصله بسته شد.\n{tail}"}
@@ -440,20 +447,68 @@ def start_xray() -> dict:
         return {"ok": False, "error": f"خطا در اجرای Xray: {e}"}
 
 
+def _kill_orphaned_xray_processes():
+    """Kill any Xray processes that are still holding our ports but not tracked by us."""
+    try:
+        # Build a regex to match any of our XRAY_PORTS
+        port_pattern = ":" + "|:".join(str(p) for p in XRAY_PORTS.values())
+        cmd = f"ss -tlnpH | grep -E '{port_pattern}' | grep -oP 'pid=\\K[0-9]+' | sort -u"
+        result = subprocess.run(
+            ["sh", "-c", cmd],
+            capture_output=True, text=True, timeout=3
+        )
+        pids = [int(p) for p in result.stdout.strip().split("\n") if p.strip()]
+        our_pid = _xray_proc.pid if _xray_proc and _xray_proc.poll() is None else None
+        for pid in pids:
+            if pid != our_pid:
+                try:
+                    os.kill(pid, 15)  # SIGTERM
+                    log.info(f"Killed orphaned Xray process PID={pid}")
+                    time.sleep(0.3)
+                    try:
+                        os.kill(pid, 9)  # SIGKILL if still alive
+                    except ProcessLookupError:
+                        pass
+                except ProcessLookupError:
+                    pass
+                except Exception as e:
+                    log.warning(f"Failed to kill orphan PID={pid}: {e}")
+    except Exception as e:
+        log.debug(f"Orphan check skipped: {e}")
+
+
 def stop_xray() -> dict:
     global _xray_proc
-    pid = get_xray_pid()
-    if not pid:
-        return {"ok": False, "error": "Xray در حال اجرا نیست"}
-    try:
-        os.kill(pid, 15)  # SIGTERM
-        time.sleep(0.5)
+    # Kill the tracked process if any
+    if _xray_proc and _xray_proc.poll() is None:
         try:
-            os.kill(pid, 9)  # SIGKILL if still alive
-        except ProcessLookupError:
+            _xray_proc.terminate()
+            time.sleep(0.3)
+            if _xray_proc.poll() is None:
+                _xray_proc.kill()
+        except Exception:
             pass
-    except Exception as e:
-        return {"ok": False, "error": f"خطا در توقف: {e}"}
+    # Kill by PID file
+    pid = None
+    if XRAY_PID_PATH.exists():
+        try:
+            pid = int(XRAY_PID_PATH.read_text().strip())
+            os.kill(pid, 15)
+            time.sleep(0.3)
+            try:
+                os.kill(pid, 9)
+            except ProcessLookupError:
+                pass
+        except Exception:
+            pass
+    # Also kill any orphaned Xray processes on our ports
+    _kill_orphaned_xray_processes()
+    # Also kill any process running our Xray binary (catches the case where
+    # Xray started with no inbounds and isn't listening on any port)
+    try:
+        subprocess.run(["pkill", "-f", str(XRAY_BIN)], capture_output=True, timeout=3)
+    except Exception:
+        pass
     _xray_proc = None
     XRAY_PID_PATH.unlink(missing_ok=True)
     conn = get_db()
@@ -465,9 +520,9 @@ def stop_xray() -> dict:
 
 
 def restart_xray() -> dict:
-    if is_xray_running():
-        stop_xray()
-        time.sleep(0.5)
+    # Always stop first (force kill any existing process)
+    stop_xray()
+    time.sleep(0.5)
     return start_xray()
 
 
@@ -710,11 +765,16 @@ async def create_config(request: Request):
     )
     conn.commit()
     conn.close()
-    # Reload Xray if running
+    # Reload Xray if running (regenerate config + restart to pick up new clients)
     xray_reloaded = False
     if is_xray_running():
-        write_xray_config()
-        xray_reloaded = True
+        try:
+            write_xray_config()
+            # Xray needs a restart to load new config.json (SIGHUP doesn't reload inbounds reliably)
+            r = restart_xray()
+            xray_reloaded = r.get("ok", False)
+        except Exception as e:
+            log.error(f"Failed to reload Xray after config create: {e}")
     return {"ok": True, "configId": config_id, "xrayReloaded": xray_reloaded}
 
 
@@ -762,7 +822,11 @@ async def update_config(request: Request, config_id: str):
     conn.commit()
     conn.close()
     if is_xray_running():
-        write_xray_config()
+        try:
+            write_xray_config()
+            restart_xray()
+        except Exception as e:
+            log.error(f"Failed to reload Xray after config update: {e}")
     return {"ok": True}
 
 
@@ -782,7 +846,11 @@ async def delete_config(request: Request, config_id: str):
     conn.commit()
     conn.close()
     if is_xray_running():
-        write_xray_config()
+        try:
+            write_xray_config()
+            restart_xray()
+        except Exception as e:
+            log.error(f"Failed to reload Xray after config delete: {e}")
     return {"ok": True}
 
 
@@ -1085,8 +1153,12 @@ async def seed_data(request: Request):
     )
     conn.commit()
     conn.close()
+    # Restart Xray to pick up the new configs
     if is_xray_running():
-        write_xray_config()
+        try:
+            restart_xray()
+        except Exception as e:
+            log.error(f"Failed to restart Xray after seed: {e}")
     return {"ok": True, "message": "داده‌های نمونه ایجاد شدند"}
 
 
@@ -1110,7 +1182,8 @@ async def ws_proxy(ws: WebSocket, proto: str):
         return
 
     await ws.accept()
-    xray_url = f"ws://127.0.0.1:{XRAY_PORTS[proto]}/{proto}"
+    # Path must match wsSettings.path in Xray config (which is /ws/{proto})
+    xray_url = f"ws://127.0.0.1:{XRAY_PORTS[proto]}/ws/{proto}"
     xray_ws = None
     try:
         xray_ws = await websockets.connect(xray_url, max_size=None)
