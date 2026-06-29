@@ -49,8 +49,30 @@ import uvicorn
 # ==============================================================================
 
 BASE_DIR = Path(__file__).parent.resolve()
-DB_PATH = BASE_DIR / "data.db"
-XRAY_DIR = BASE_DIR / "xray-bin"
+
+# On PaaS platforms (fastapicloud.com, Heroku, etc.) the filesystem is often
+# read-only except for /tmp. We use a DATA_DIR that points to /tmp when the
+# current directory is not writable.
+def _find_data_dir() -> Path:
+    """Find a writable directory for runtime data."""
+    # Check if BASE_DIR is writable
+    try:
+        test_file = BASE_DIR / ".write_test"
+        test_file.touch()
+        test_file.unlink()
+        return BASE_DIR / "data"
+    except Exception:
+        pass
+    # Fall back to /tmp
+    tmp_dir = Path("/tmp") / "fastapicloud-data"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    return tmp_dir
+
+DATA_DIR = _find_data_dir()
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+DB_PATH = DATA_DIR / "data.db"
+XRAY_DIR = DATA_DIR / "xray-bin"
 XRAY_BIN = XRAY_DIR / "xray"
 XRAY_CONFIG_PATH = XRAY_DIR / "config.json"
 XRAY_LOG_PATH = XRAY_DIR / "xray.log"
