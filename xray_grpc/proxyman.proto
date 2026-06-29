@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package xray.app.proxyman.command;
+
+message AddUserOperation {
+  string email = 1;
+  Account account = 2;
+}
+
+message RemoveUserOperation {
+  string email = 1;
+}
+
+message AddUserRequest {
+  string tag = 1;
+  AddUserOperation user = 2;
+}
+
+message AddUserResponse {}
+
+message RemoveUserRequest {
+  string tag = 1;
+  string email = 2;
+}
+
+message RemoveUserResponse {}
+
+message Account {
+  string id = 1;
+  bytes account = 2;
+}
+
+service HandlerService {
+  rpc AddUser(AddUserRequest) returns (AddUserResponse) {}
+  rpc RemoveUser(RemoveUserRequest) returns (RemoveUserResponse) {}
+}

@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package xray.proxy;
+
+// VMess account
+message VMessAccount {
+  string id = 1;
+  uint32 alter_id = 2;
+  string security_settings = 3;
+}
+
+// VLESS account  
+message VLESSAccount {
+  string id = 1;
+  string flow = 2;
+  string encryption = 3;
+}
+
+// Trojan account
+message TrojanAccount {
+  string password = 1;
+}

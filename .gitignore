@@ -10,6 +10,7 @@ dist/
 build/
 
 # Runtime data
+data/
 data.db
 xray-bin/
 *.log

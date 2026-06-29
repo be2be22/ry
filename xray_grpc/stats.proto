@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package xray.app.stats.command;
+
+message GetStatsRequest {
+  string name = 1;
+  bool reset = 2;
+}
+
+message Stat {
+  string name = 1;
+  int64 value = 2;
+}
+
+message GetStatsResponse {
+  Stat stat = 1;
+}
+
+message QueryStatsRequest {
+  string pattern = 1;
+  bool reset = 2;
+}
+
+message QueryStatsResponse {
+  repeated Stat stat = 1;
+}
+
+message SysStatsRequest {}
+
+message SysStatsResponse {
+  uint32 num_goroutine = 1;
+  uint32 num_thread = 2;
+  uint32 alloc = 3;
+  uint32 total_alloc = 4;
+  uint32 sys = 5;
+  uint32 mallocs = 6;
+  uint32 frees = 7;
+  uint64 live_objects = 8;
+  uint32 up_time = 9;
+}
+
+service StatsService {
+  rpc GetStats(GetStatsRequest) returns (GetStatsResponse) {}
+  rpc QueryStats(QueryStatsRequest) returns (QueryStatsResponse) {}
+  rpc SysStats(SysStatsRequest) returns (SysStatsResponse) {}
+}

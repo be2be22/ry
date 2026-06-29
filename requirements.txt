@@ -1,3 +1,5 @@
 fastapi[standard]>=0.115.0
 qrcode[pil]>=8.0
 websockets>=14.0
+grpcio>=1.60.0
+protobuf>=4.25.0

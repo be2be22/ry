@@ -83,10 +83,10 @@ input:focus, select:focus, textarea:focus {
   color: var(--text); border: 1px solid rgba(139,92,246,0.3);
 }
 
-.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 24px; }
 .stat-card { padding: 20px; }
 .stat-card .label { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
-.stat-card .value { font-size: 28px; font-weight: 700; }
+.stat-card .value { font-size: 24px; font-weight: 700; }
 .stat-card .icon { font-size: 20px; margin-bottom: 8px; }
 
 table { width: 100%; border-collapse: collapse; }
@@ -142,8 +142,6 @@ tr:hover { background: rgba(255,255,255,0.02); }
 }
 .icon-btn:hover { background: rgba(255,255,255,0.1); color: var(--text); }
 
-.server-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
-
 .qr-container { background: white; padding: 20px; border-radius: 16px; display: inline-block; }
 .qr-container img { display: block; }
 
@@ -159,22 +157,14 @@ tr:hover { background: rgba(255,255,255,0.02); }
 <div id="root"></div>
 
 <script>
-// ============================================================================
-// State
-// ============================================================================
 let state = {
   admin: null,
   tab: 'dashboard',
   configs: [],
-  servers: [],
-  users: [],
   stats: null,
   xrayStatus: null,
 };
 
-// ============================================================================
-// API helpers
-// ============================================================================
 async function api(path, options = {}) {
   try {
     const opts = { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers||{}) } };
@@ -196,9 +186,6 @@ function toast(msg, type='success') {
   setTimeout(() => el.remove(), 3000);
 }
 
-// ============================================================================
-// Auth
-// ============================================================================
 async function checkAuth() {
   const data = await api('/api/auth/check');
   state.admin = data.ok ? data.admin : null;
@@ -209,7 +196,6 @@ async function login(username, password) {
   const data = await api('/api/auth/login', { method: 'POST', body: { username, password } });
   if (data.ok) {
     state.admin = data.admin;
-    // Load dashboard data right after login
     await loadStats();
     render();
     toast('خوش آمدید!');
@@ -226,20 +212,9 @@ async function logout() {
   render();
 }
 
-// ============================================================================
-// Data loaders (all return promises)
-// ============================================================================
 async function loadConfigs() {
   const data = await api('/api/configs');
   if (data.ok) state.configs = data.configs || [];
-}
-async function loadServers() {
-  const data = await api('/api/servers');
-  if (data.ok) state.servers = data.servers || [];
-}
-async function loadUsers() {
-  const data = await api('/api/users');
-  if (data.ok) state.users = data.users || [];
 }
 async function loadStats() {
   const data = await api('/api/stats');
@@ -250,9 +225,6 @@ async function loadXrayStatus() {
   if (data.ok) state.xrayStatus = data.status;
 }
 
-// ============================================================================
-// Format helpers
-// ============================================================================
 function toPersian(n) { return String(n||0).replace(/\d/g, d => '۰۱۲۳۴۵۶۷۸۹'[d]); }
 function formatBytes(b) {
   b = Number(b)||0;
@@ -262,17 +234,14 @@ function formatBytes(b) {
   return (b/Math.pow(1024,i)).toFixed(1) + ' ' + u[i];
 }
 function formatDate(s) {
-  if (!s) return '—';
-  try { return new Date(s).toLocaleString('fa-IR'); } catch { return s; }
+  if (!s) return 'نامحدود';
+  try { return new Date(s).toLocaleDateString('fa-IR'); } catch { return s; }
 }
 function escapeHtml(s) {
   if (!s) return '';
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
-// ============================================================================
-// Render
-// ============================================================================
 function render() {
   const root = document.getElementById('root');
   if (!state.admin) {
@@ -321,8 +290,6 @@ function renderSidebar() {
   const tabs = [
     { id: 'dashboard', label: 'داشبورد', icon: '📊' },
     { id: 'configs', label: 'کانفیگ‌ها', icon: '⚙️' },
-    { id: 'servers', label: 'سرورها', icon: '🌐' },
-    { id: 'users', label: 'کاربران', icon: '👥' },
     { id: 'xray', label: 'سرور Xray', icon: '⚡' },
     { id: 'settings', label: 'تنظیمات', icon: '🔧' },
   ];
@@ -356,14 +323,10 @@ function renderSidebar() {
 
 async function setTab(id) {
   state.tab = id;
-  // Render immediately with loading state
   render();
-  // Load data, then render again
   try {
     if (id === 'dashboard') await loadStats();
     else if (id === 'configs') await loadConfigs();
-    else if (id === 'servers') await loadServers();
-    else if (id === 'users') await loadUsers();
     else if (id === 'xray') await loadXrayStatus();
   } catch (e) {
     console.error('Load error:', e);
@@ -375,8 +338,6 @@ function renderTab() {
   switch(state.tab) {
     case 'dashboard': return renderDashboard();
     case 'configs': return renderConfigs();
-    case 'servers': return renderServers();
-    case 'users': return renderUsers();
     case 'xray': return renderXray();
     case 'settings': return renderSettings();
     default: return renderDashboard();
@@ -384,7 +345,7 @@ function renderTab() {
 }
 
 // ============================================================================
-// Dashboard
+// Dashboard — with traffic stats
 // ============================================================================
 function renderDashboard() {
   const s = state.stats;
@@ -392,11 +353,10 @@ function renderDashboard() {
 
   const totalConfigs = (s.configs && s.configs.total) || 0;
   const activeConfigs = (s.configs && s.configs.active) || 0;
-  const totalServers = (s.servers && s.servers.total) || 0;
-  const totalUsers = (s.users && s.users.total) || 0;
   const xray = s.xray || {};
   const recentLogs = s.recentLogs || [];
-  const showSeed = totalConfigs === 0 && state.configs.length === 0;
+  const traffic = s.traffic || {upload: 0, download: 0, total: 0};
+  const showSeed = totalConfigs === 0;
 
   return `
   <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px;">
@@ -406,6 +366,7 @@ function renderDashboard() {
     </div>
     ${showSeed ? `<button class="btn btn-primary" onclick="seedData()">بارگذاری داده‌های نمونه</button>` : ''}
   </div>
+
   <div class="stat-grid">
     <div class="glass stat-card">
       <div class="icon">⚙️</div>
@@ -418,16 +379,22 @@ function renderDashboard() {
       <div class="value" style="color:var(--success);">${toPersian(activeConfigs)}</div>
     </div>
     <div class="glass stat-card">
-      <div class="icon">🌐</div>
-      <div class="label">سرورها</div>
-      <div class="value">${toPersian(totalServers)}</div>
+      <div class="icon">📤</div>
+      <div class="label">آپلود کل</div>
+      <div class="value" style="color:var(--primary); font-size:18px;">${formatBytes(traffic.upload)}</div>
     </div>
     <div class="glass stat-card">
-      <div class="icon">👥</div>
-      <div class="label">کاربران</div>
-      <div class="value">${toPersian(totalUsers)}</div>
+      <div class="icon">📥</div>
+      <div class="label">دانلود کل</div>
+      <div class="value" style="color:var(--accent); font-size:18px;">${formatBytes(traffic.download)}</div>
+    </div>
+    <div class="glass stat-card">
+      <div class="icon">📊</div>
+      <div class="label">کل ترافیک</div>
+      <div class="value" style="font-size:18px; background:linear-gradient(135deg,#8b5cf6,#ec4899); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">${formatBytes(traffic.total)}</div>
     </div>
   </div>
+
   <div class="glass" style="padding:20px; margin-bottom:24px;">
     <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px;">
       <div style="width:40px; height:40px; border-radius:12px; background:linear-gradient(135deg,${xray.running?'#10b981':'#6b7280'},${xray.running?'#059669':'#4b5563'}); display:flex; align-items:center; justify-content:center; font-size:20px;">⚡</div>
@@ -435,12 +402,13 @@ function renderDashboard() {
         <div style="font-weight:600;">سرور Xray محلی</div>
         <div style="font-size:12px; color:var(--muted); display:flex; align-items:center; gap:6px;">
           <span class="pulse" style="width:8px; height:8px; border-radius:50%; background:${xray.running?'var(--success)':'var(--muted)'}; display:inline-block;"></span>
-          ${xray.running ? `در حال اجرا — ${toPersian(xray.client_count||0)} کلاینت` : 'متوقف'}
+          ${xray.running ? `در حال اجرا — ${toPersian(xray.client_count)} کلاینت فعال` : 'متوقف'}
         </div>
       </div>
     </div>
     ${!xray.running ? `<button class="btn btn-success" onclick="startXray()">اجرای Xray</button>` : ''}
   </div>
+
   <div class="glass" style="padding:20px;">
     <h3 style="margin-bottom:16px;">فعالیت‌های اخیر</h3>
     ${recentLogs.length === 0 ? '<p style="color:var(--muted); text-align:center; padding:20px;">هنوز فعالیتی ثبت نشده</p>' :
@@ -482,7 +450,7 @@ async function startXray() {
 }
 
 // ============================================================================
-// Configs
+// Configs — simplified, all-in-one form
 // ============================================================================
 function renderConfigs() {
   return `
@@ -499,25 +467,40 @@ function renderConfigs() {
     <table>
       <thead>
         <tr>
-          <th>نام</th><th>نوع</th><th>سرور</th><th>وضعیت</th><th>Xray</th><th style="text-align:center;">عملیات</th>
+          <th>نام</th><th>نوع</th><th>ترافیک</th><th>حجم</th><th>انقضا</th><th>وضعیت</th><th>Xray</th><th style="text-align:center;">عملیات</th>
         </tr>
       </thead>
       <tbody>
-        ${state.configs.map(c => `
+        ${state.configs.map(c => {
+          const dataLimit = c.data_limit > 0 ? formatBytes(c.data_limit) : 'نامحدود';
+          const dataUsed = formatBytes(c.total_usage_bytes || 0);
+          const usagePct = c.data_limit > 0 ? Math.min(100, (c.total_usage_bytes / c.data_limit) * 100) : 0;
+          return `
           <tr>
-            <td><div style="font-weight:600;">${escapeHtml(c.name)}</div><div style="font-size:11px; color:var(--muted); font-family:monospace;" dir="ltr">${escapeHtml((c.uuid||'').slice(0,8))}...</div></td>
+            <td>
+              <div style="font-weight:600;">${escapeHtml(c.name)}</div>
+              <div style="font-size:11px; color:var(--muted); font-family:monospace;" dir="ltr">${escapeHtml((c.uuid||'').slice(0,8))}...</div>
+            </td>
             <td><span class="badge badge-info">${escapeHtml((c.type||'').toUpperCase())}</span></td>
-            <td><div style="font-size:12px;">${escapeHtml(c.server_name||'—')}</div><div style="font-size:11px; color:var(--muted); font-family:monospace;" dir="ltr">${escapeHtml(c.server_host||'')}:${c.port||443}</div></td>
-            <td>${c.status==='active'?'<span class="badge badge-success">فعال</span>':c.status==='disabled'?'<span class="badge badge-warning">غیرفعال</span>':'<span class="badge badge-danger">منقضی</span>'}</td>
-            <td>${c.xray_active?'<span class="badge badge-success">فعال</span>':'<span class="badge badge-warning">غیرفعال</span>'}</td>
+            <td style="font-size:11px;">
+              <div>↑ ${formatBytes(c.upload_bytes||0)}</div>
+              <div>↓ ${formatBytes(c.download_bytes||0)}</div>
+            </td>
+            <td style="font-size:11px;">
+              <div>${dataUsed} / ${dataLimit}</div>
+              ${c.data_limit > 0 ? `<div style="height:4px; background:var(--card); border-radius:2px; margin-top:4px;"><div style="height:100%; background:${usagePct>90?'var(--danger)':usagePct>70?'var(--warning)':'var(--success)'}; border-radius:2px; width:${usagePct}%;"></div></div>` : ''}
+            </td>
+            <td style="font-size:11px;">${formatDate(c.expires_at)}</td>
+            <td>${c.status==='active'?'<span class="badge badge-success">فعال</span>':'<span class="badge badge-warning">غیرفعال</span>'}</td>
+            <td>${c.xray_active?'<span class="badge badge-success">فعال</span>':'<span class="badge badge-warning">—</span>'}</td>
             <td style="text-align:center; white-space:nowrap;">
               <button class="icon-btn" onclick="showQR('${c.id}')" title="QR">📱</button>
               <button class="icon-btn" onclick="showShareLink('${c.id}')" title="لینک">🔗</button>
               <button class="icon-btn" onclick="showConfigForm('${c.id}')" title="ویرایش">✏️</button>
               <button class="icon-btn" onclick="deleteConfig('${c.id}')" title="حذف">🗑️</button>
             </td>
-          </tr>
-        `).join('')}
+          </tr>`;
+        }).join('')}
       </tbody>
     </table>
     </div>
@@ -526,12 +509,10 @@ function renderConfigs() {
 }
 
 async function showConfigForm(id) {
-  // Make sure servers and users are loaded first
-  if (state.servers.length === 0) await loadServers();
-  if (state.users.length === 0) await loadUsers();
-
   const c = id ? state.configs.find(x => x.id === id) : null;
   const currentType = c?.type || 'vmess';
+  const dataLimitGB = c ? Math.round((c.data_limit||0) / 1073741824) : 0;
+  const expireDays = c?.expires_at ? Math.max(0, Math.ceil((new Date(c.expires_at) - new Date()) / (1000*60*60*24))) : 0;
 
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
@@ -556,49 +537,41 @@ async function showConfigForm(id) {
       </div>
       <div class="form-group">
         <label>نام کانفیگ</label>
-        <input name="name" value="${escapeHtml(c?.name||'')}" required>
-      </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label>سرور</label>
-          <select name="serverId" required>
-            ${state.servers.map(s => `<option value="${s.id}" ${c?.server_id===s.id?'selected':''}>${escapeHtml(s.name)}</option>`).join('')}
-          </select>
-        </div>
-        <div class="form-group">
-          <label>پورت</label>
-          <input name="port" type="number" value="${c?.port||443}" dir="ltr">
-        </div>
+        <input name="name" value="${escapeHtml(c?.name||'')}" required placeholder="مثلا: ali-vmess">
       </div>
       <div class="form-group">
         <label>UUID</label>
         <div style="display:flex; gap:8px;">
-          <input name="uuid" value="${escapeHtml(c?.uuid||'')}" dir="ltr" style="flex:1;">
+          <input name="uuid" value="${escapeHtml(c?.uuid||'')}" dir="ltr" style="flex:1;" placeholder="تولید خودکار">
           <button type="button" class="btn btn-ghost" onclick="generateUuid(this)">تولید</button>
         </div>
       </div>
       <div class="form-row">
         <div class="form-group">
-          <label>وضعیت</label>
-          <select name="status">
-            <option value="active" ${c?.status==='active'?'selected':''}>فعال</option>
-            <option value="disabled" ${c?.status==='disabled'?'selected':''}>غیرفعال</option>
-          </select>
+          <label>سقف حجم (GB)</label>
+          <input name="dataLimit" type="number" value="${dataLimitGB}" dir="ltr" min="0" placeholder="۰ = نامحدود">
         </div>
         <div class="form-group">
-          <label>کاربر (اختیاری)</label>
-          <select name="assignedUserId">
-            <option value="">—</option>
-            ${state.users.map(u => `<option value="${u.id}" ${c?.assigned_user_id===u.id?'selected':''}>${escapeHtml(u.username)}</option>`).join('')}
-          </select>
+          <label>مدت اعتبار (روز)</label>
+          <input name="expireDays" type="number" value="${expireDays}" dir="ltr" min="0" placeholder="۰ = نامحدود">
         </div>
+      </div>
+      <div class="form-group">
+        <label>وضعیت</label>
+        <select name="status">
+          <option value="active" ${c?.status==='active'?'selected':''}>فعال</option>
+          <option value="disabled" ${c?.status==='disabled'?'selected':''}>غیرفعال</option>
+        </select>
+      </div>
+      <div style="background:var(--card); padding:12px; border-radius:12px; margin-bottom:16px; font-size:11px; color:var(--muted);">
+        🌐 سرور: <span dir="ltr" style="font-family:monospace; color:var(--primary);">${escapeHtml(window.location.hostname)}</span>
+        — پورت: <span dir="ltr" style="font-family:monospace; color:var(--primary);">۴۴۳</span>
       </div>
       <button type="submit" class="btn btn-primary" style="width:100%; justify-content:center;">${c?'ذخیره':'ساخت'}</button>
     </form>
   </div>`;
   document.body.appendChild(modal);
 
-  // Attach form submit handler
   document.getElementById('configForm').onsubmit = async function(e) {
     e.preventDefault();
     await saveConfig(this, id);
@@ -606,9 +579,7 @@ async function showConfigForm(id) {
 }
 
 function selectType(t) {
-  // Update hidden input
   document.querySelector('#configForm input[name="type"]').value = t;
-  // Update button styles
   document.querySelectorAll('#typeButtons button').forEach(btn => {
     if (btn.dataset.type === t) {
       btn.style.background = 'linear-gradient(135deg,#8b5cf6,#ec4899)';
@@ -621,7 +592,6 @@ function selectType(t) {
 }
 
 function generateUuid(btn) {
-  // Simple UUID v4 generator (works without crypto.randomUUID)
   let uuid;
   if (window.crypto && window.crypto.randomUUID) {
     uuid = window.crypto.randomUUID();
@@ -639,14 +609,12 @@ async function saveConfig(form, id) {
   const data = {
     name: form.name.value,
     type: form.type.value,
-    serverId: form.serverId.value,
-    port: Number(form.port.value),
     uuid: form.uuid.value,
+    dataLimit: Number(form.dataLimit.value) || 0,
+    expireDays: Number(form.expireDays.value) || 0,
     status: form.status.value,
-    assignedUserId: form.assignedUserId.value || null,
   };
   if (!data.name) { toast('نام الزامی است', 'error'); return; }
-  if (!data.serverId) { toast('سرور الزامی است', 'error'); return; }
 
   const url = id ? `/api/configs/${id}` : '/api/configs';
   const method = id ? 'PUT' : 'POST';
@@ -705,194 +673,6 @@ function copyToClipboard(text) {
 }
 
 // ============================================================================
-// Servers
-// ============================================================================
-function renderServers() {
-  return `
-  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px;">
-    <div>
-      <h1 style="font-size:24px; margin-bottom:4px;">مدیریت سرورها</h1>
-      <p style="color:var(--muted); font-size:13px;">${toPersian(state.servers.length)} سرور</p>
-    </div>
-    <button class="btn btn-primary" onclick="showServerForm()">➕ افزودن سرور</button>
-  </div>
-  <div class="server-grid">
-    ${state.servers.length === 0 ? '<div class="glass loading">هیچ سروری یافت نشد</div>' :
-      state.servers.map(s => `
-        <div class="glass" style="padding:20px;">
-          <div style="display:flex; justify-content:space-between; align-items:start; margin-bottom:12px;">
-            <div>
-              <div style="font-weight:700; font-size:16px;">${escapeHtml(s.name)}</div>
-              <div style="font-size:12px; color:var(--muted); font-family:monospace;" dir="ltr">${escapeHtml(s.host)}:${s.port}</div>
-            </div>
-            ${s.is_active ? '<span class="badge badge-success">فعال</span>' : '<span class="badge badge-warning">غیرفعال</span>'}
-          </div>
-          ${s.location ? `<div style="font-size:12px; color:var(--muted); margin-bottom:8px;">📍 ${escapeHtml(s.location)}</div>` : ''}
-          ${s.remark ? `<div style="font-size:12px; color:var(--muted); margin-bottom:8px;">${escapeHtml(s.remark)}</div>` : ''}
-          <div style="display:flex; justify-content:space-between; align-items:center; padding-top:12px; border-top:1px solid var(--border);">
-            <span style="font-size:12px; color:var(--muted);">${toPersian(s.config_count||0)} کانفیگ</span>
-            <div>
-              <button class="icon-btn" onclick="showServerForm('${s.id}')">✏️</button>
-              <button class="icon-btn" onclick="deleteServer('${s.id}')">🗑️</button>
-            </div>
-          </div>
-        </div>
-      `).join('')
-    }
-  </div>`;
-}
-
-async function showServerForm(id) {
-  const s = id ? state.servers.find(x => x.id === id) : null;
-  const modal = document.createElement('div');
-  modal.className = 'modal-overlay';
-  modal.innerHTML = `
-  <div class="modal">
-    <div class="modal-header"><h3>${s?'ویرایش':'افزودن'} سرور</h3><button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button></div>
-    <form id="serverForm">
-      <div class="form-group"><label>نام</label><input name="name" value="${escapeHtml(s?.name||'')}" required></div>
-      <div class="form-row">
-        <div class="form-group"><label>آدرس (Host)</label><input name="host" value="${escapeHtml(s?.host||'')}" dir="ltr" required></div>
-        <div class="form-group"><label>پورت</label><input name="port" type="number" value="${s?.port||443}" dir="ltr"></div>
-      </div>
-      <div class="form-group"><label>موقعیت</label><input name="location" value="${escapeHtml(s?.location||'')}"></div>
-      <div class="form-group"><label>توضیحات</label><input name="remark" value="${escapeHtml(s?.remark||'')}"></div>
-      <button type="submit" class="btn btn-primary" style="width:100%; justify-content:center;">${s?'ذخیره':'افزودن'}</button>
-    </form>
-  </div>`;
-  document.body.appendChild(modal);
-  document.getElementById('serverForm').onsubmit = async function(e) {
-    e.preventDefault();
-    const data = {
-      name: this.name.value,
-      host: this.host.value,
-      port: Number(this.port.value),
-      location: this.location.value,
-      remark: this.remark.value,
-    };
-    const url = id ? `/api/servers/${id}` : '/api/servers';
-    const method = id ? 'PUT' : 'POST';
-    const res = await api(url, { method, body: data });
-    if (res.ok) {
-      this.closest('.modal-overlay').remove();
-      toast('ذخیره شد');
-      await loadServers();
-      render();
-    } else {
-      toast(res.error || 'خطا', 'error');
-    }
-  };
-}
-
-async function deleteServer(id) {
-  if (!confirm('حذف این سرور؟')) return;
-  const res = await api(`/api/servers/${id}`, { method: 'DELETE' });
-  if (res.ok) {
-    toast('حذف شد');
-    await loadServers();
-    render();
-  } else {
-    toast(res.error || 'خطا', 'error');
-  }
-}
-
-// ============================================================================
-// Users
-// ============================================================================
-function renderUsers() {
-  return `
-  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px;">
-    <div>
-      <h1 style="font-size:24px; margin-bottom:4px;">مدیریت کاربران</h1>
-      <p style="color:var(--muted); font-size:13px;">${toPersian(state.users.length)} کاربر</p>
-    </div>
-    <button class="btn btn-primary" onclick="showUserForm()">➕ افزودن کاربر</button>
-  </div>
-  <div class="glass" style="overflow:hidden;">
-    ${state.users.length === 0 ? '<div class="loading">هیچ کاربری یافت نشد</div>' : `
-    <div style="overflow-x:auto;">
-    <table>
-      <thead><tr><th>نام کاربری</th><th>ایمیل</th><th>وضعیت</th><th>سقف داده</th><th>انقضا</th><th style="text-align:center;">عملیات</th></tr></thead>
-      <tbody>
-        ${state.users.map(u => `
-          <tr>
-            <td style="font-weight:600;">${escapeHtml(u.username)}</td>
-            <td style="font-family:monospace; font-size:12px;" dir="ltr">${escapeHtml(u.email||'—')}</td>
-            <td>${u.status==='active'?'<span class="badge badge-success">فعال</span>':'<span class="badge badge-warning">معلق</span>'}</td>
-            <td style="font-size:12px;">${u.data_limit>0?formatBytes(u.data_limit):'نامحدود'}</td>
-            <td style="font-size:12px;">${formatDate(u.expires_at)}</td>
-            <td style="text-align:center; white-space:nowrap;">
-              <button class="icon-btn" onclick="showUserForm('${u.id}')">✏️</button>
-              <button class="icon-btn" onclick="deleteUser('${u.id}')">🗑️</button>
-            </td>
-          </tr>
-        `).join('')}
-      </tbody>
-    </table>
-    </div>
-    `}
-  </div>`;
-}
-
-async function showUserForm(id) {
-  const u = id ? state.users.find(x => x.id === id) : null;
-  const modal = document.createElement('div');
-  modal.className = 'modal-overlay';
-  modal.innerHTML = `
-  <div class="modal">
-    <div class="modal-header"><h3>${u?'ویرایش':'افزودن'} کاربر</h3><button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button></div>
-    <form id="userForm">
-      <div class="form-group"><label>نام کاربری</label><input name="username" value="${escapeHtml(u?.username||'')}" dir="ltr" required></div>
-      <div class="form-row">
-        <div class="form-group"><label>ایمیل</label><input name="email" type="email" value="${escapeHtml(u?.email||'')}" dir="ltr"></div>
-        <div class="form-group"><label>تلفن</label><input name="phone" value="${escapeHtml(u?.phone||'')}" dir="ltr"></div>
-      </div>
-      <div class="form-row">
-        <div class="form-group"><label>سقف داده (GB)</label><input name="dataLimit" type="number" value="${u?Math.round((u.data_limit||0)/1073741824):50}" dir="ltr"></div>
-        <div class="form-group"><label>مدت اعتبار (روز)</label><input name="expireDays" type="number" value="${u?.expire_days||30}" dir="ltr"></div>
-      </div>
-      <div class="form-group"><label>وضعیت</label><select name="status"><option value="active" ${u?.status==='active'?'selected':''}>فعال</option><option value="suspended" ${u?.status==='suspended'?'selected':''}>معلق</option></select></div>
-      <button type="submit" class="btn btn-primary" style="width:100%; justify-content:center;">${u?'ذخیره':'افزودن'}</button>
-    </form>
-  </div>`;
-  document.body.appendChild(modal);
-  document.getElementById('userForm').onsubmit = async function(e) {
-    e.preventDefault();
-    const data = {
-      username: this.username.value,
-      email: this.email.value || null,
-      phone: this.phone.value || null,
-      dataLimit: Number(this.dataLimit.value) * 1073741824,
-      expireDays: Number(this.expireDays.value),
-      status: this.status.value,
-    };
-    const url = id ? `/api/users/${id}` : '/api/users';
-    const method = id ? 'PUT' : 'POST';
-    const res = await api(url, { method, body: data });
-    if (res.ok) {
-      this.closest('.modal-overlay').remove();
-      toast('ذخیره شد');
-      await loadUsers();
-      render();
-    } else {
-      toast(res.error || 'خطا', 'error');
-    }
-  };
-}
-
-async function deleteUser(id) {
-  if (!confirm('حذف این کاربر؟')) return;
-  const res = await api(`/api/users/${id}`, { method: 'DELETE' });
-  if (res.ok) {
-    toast('حذف شد');
-    await loadUsers();
-    render();
-  } else {
-    toast(res.error || 'خطا', 'error');
-  }
-}
-
-// ============================================================================
 // Xray
 // ============================================================================
 function renderXray() {
@@ -927,7 +707,6 @@ function renderXray() {
     <div class="stat-grid" style="margin-bottom:0;">
       <div class="glass stat-card"><div class="icon">🌐</div><div class="label">آدرس اتصال</div><div class="value" style="font-size:14px; font-family:monospace;" dir="ltr">${escapeHtml(s.public_host||'')}:${s.public_port}</div></div>
       <div class="glass stat-card"><div class="icon">👥</div><div class="label">کلاینت‌ها</div><div class="value">${toPersian(s.client_count||0)}</div></div>
-      <div class="glass stat-card"><div class="icon">🔌</div><div class="label">Inbound ها</div><div class="value">${toPersian(s.inbound_count||0)}</div></div>
       <div class="glass stat-card"><div class="icon">📦</div><div class="label">Xray Binary</div><div class="value" style="font-size:14px;">${s.xray_bin_exists?'✅ نصب':'❌ ناموجود'}</div></div>
     </div>
   </div>
@@ -947,7 +726,6 @@ async function startXray2() {
     toast(data.error || 'خطا', 'error');
   }
 }
-
 async function stopXray() {
   if (!confirm('توقف Xray؟')) return;
   const data = await api('/api/xray/stop', { method: 'POST' });
@@ -959,7 +737,6 @@ async function stopXray() {
     toast(data.error || 'خطا', 'error');
   }
 }
-
 async function restartXray() {
   const data = await api('/api/xray/restart', { method: 'POST' });
   if (data.ok) {
@@ -985,16 +762,16 @@ async function showConfigPreview() {
 }
 
 async function showLogs() {
-  const data = await api('/api/xray/logs?lines=100');
-  if (!data.ok) { toast('خطا', 'error'); return; }
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
   modal.innerHTML = `
   <div class="modal" style="max-width:700px;">
     <div class="modal-header"><h3>لاگ‌های Xray</h3><button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button></div>
-    <pre style="background:var(--card); padding:16px; border-radius:12px; overflow:auto; font-size:11px; max-height:60vh; white-space:pre-wrap; color:var(--muted);" dir="ltr">${escapeHtml(data.content||'(خالی)')}</pre>
+    <div id="logsContent" style="background:var(--card); padding:16px; border-radius:12px; overflow:auto; font-size:11px; max-height:60vh; white-space:pre-wrap; color:var(--muted);" dir="ltr">در حال بارگذاری...</div>
   </div>`;
   document.body.appendChild(modal);
+  const data = await api('/api/xray/logs?lines=100');
+  document.getElementById('logsContent').textContent = data.ok ? (data.content || '(خالی)') : 'خطا در بارگذاری';
 }
 
 // ============================================================================
@@ -1025,13 +802,13 @@ function renderSettings() {
   <div class="glass" style="padding:24px;">
     <h3 style="margin-bottom:16px;">اطلاعات سیستم</h3>
     <div style="display:flex; justify-content:space-between; padding:12px; background:var(--card); border-radius:12px; margin-bottom:8px;">
-      <span style="color:var(--muted);">نسخه</span><span style="font-family:monospace;" dir="ltr">v1.0.0 Python</span>
+      <span style="color:var(--muted);">نسخه</span><span style="font-family:monospace;" dir="ltr">v2.0.0 Python</span>
     </div>
     <div style="display:flex; justify-content:space-between; padding:12px; background:var(--card); border-radius:12px; margin-bottom:8px;">
       <span style="color:var(--muted);">پروتکل‌ها</span><span>VMess · VLESS · Trojan</span>
     </div>
     <div style="display:flex; justify-content:space-between; padding:12px; background:var(--card); border-radius:12px;">
-      <span style="color:var(--muted);">دیتابیس</span><span>SQLite</span>
+      <span style="color:var(--muted);">دیتابیس</span><span>SQLite + gRPC API</span>
     </div>
   </div>`;
 }
@@ -1041,7 +818,6 @@ function renderSettings() {
 // ============================================================================
 checkAuth();
 
-// Auto-refresh for dashboard and xray tabs
 setInterval(async () => {
   if (!state.admin) return;
   if (state.tab === 'dashboard') {
@@ -1053,7 +829,6 @@ setInterval(async () => {
   }
 }, 10000);
 
-// Attach password form handler dynamically
 document.addEventListener('submit', async function(e) {
   if (e.target.id === 'passwordForm') {
     e.preventDefault();
