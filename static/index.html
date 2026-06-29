@@ -29,16 +29,14 @@ body {
   min-height: 100vh;
   font-size: 14px;
 }
-a { color: var(--primary); text-decoration: none; }
 button { cursor: pointer; font-family: inherit; border: none; outline: none; }
-input, select, textarea {
+input, select {
   font-family: inherit; background: var(--card); border: 1px solid var(--border);
   color: var(--text); padding: 10px 14px; border-radius: 12px; width: 100%; outline: none;
   transition: all 0.2s;
 }
-input:focus, select:focus, textarea:focus {
+input:focus, select:focus {
   border-color: var(--primary); background: rgba(255,255,255,0.08);
-  box-shadow: 0 0 0 3px rgba(139,92,246,0.15);
 }
 .glass {
   background: var(--card); backdrop-filter: blur(20px);
@@ -54,16 +52,13 @@ input:focus, select:focus, textarea:focus {
   box-shadow: 0 4px 16px rgba(139,92,246,0.3);
 }
 .btn-primary:hover { transform: translateY(-1px); }
-.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn-ghost {
-  background: var(--card); border: 1px solid var(--border); color: var(--text);
-}
+.btn-ghost { background: var(--card); border: 1px solid var(--border); color: var(--text); }
 .btn-ghost:hover { background: rgba(255,255,255,0.1); }
 .btn-danger { background: var(--danger); color: white; }
 .btn-success { background: var(--success); color: white; }
 
 #app { display: flex; min-height: 100vh; }
-.sidebar { width: 250px; padding: 20px; position: sticky; top: 0; height: 100vh; }
+.sidebar { width: 240px; padding: 20px; position: sticky; top: 0; height: 100vh; }
 .main { flex: 1; padding: 24px; max-width: 100%; overflow-x: hidden; }
 
 .logo { display: flex; align-items: center; gap: 12px; margin-bottom: 30px; }
@@ -83,18 +78,18 @@ input:focus, select:focus, textarea:focus {
   color: var(--text); border: 1px solid rgba(139,92,246,0.3);
 }
 
-.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 24px; }
-.stat-card { padding: 20px; }
-.stat-card .label { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
-.stat-card .value { font-size: 24px; font-weight: 700; }
-.stat-card .icon { font-size: 20px; margin-bottom: 8px; }
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.stat-card { padding: 16px; }
+.stat-card .label { color: var(--muted); font-size: 11px; margin-bottom: 6px; }
+.stat-card .value { font-size: 22px; font-weight: 700; }
+.stat-card .icon { font-size: 18px; margin-bottom: 6px; }
 
 table { width: 100%; border-collapse: collapse; }
-th, td { padding: 12px; text-align: right; border-bottom: 1px solid var(--border); font-size: 13px; }
+th, td { padding: 10px 12px; text-align: right; border-bottom: 1px solid var(--border); font-size: 12px; }
 th { color: var(--muted); font-weight: 500; }
 tr:hover { background: rgba(255,255,255,0.02); }
 
-.badge { padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 500; display: inline-block; }
+.badge { padding: 3px 10px; border-radius: 20px; font-size: 10px; font-weight: 500; display: inline-block; }
 .badge-success { background: rgba(16,185,129,0.15); color: var(--success); }
 .badge-warning { background: rgba(245,158,11,0.15); color: var(--warning); }
 .badge-danger { background: rgba(239,68,68,0.15); color: var(--danger); }
@@ -111,7 +106,7 @@ tr:hover { background: rgba(255,255,255,0.02); }
 .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
 .modal-close { background: none; color: var(--muted); font-size: 24px; padding: 0; }
 
-.form-group { margin-bottom: 16px; }
+.form-group { margin-bottom: 14px; }
 .form-group label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
@@ -137,8 +132,7 @@ tr:hover { background: rgba(255,255,255,0.02); }
 
 .icon-btn {
   background: none; padding: 6px; border-radius: 8px; color: var(--muted);
-  display: inline-flex; align-items: center; justify-content: center;
-  border: none;
+  display: inline-flex; align-items: center; justify-content: center; border: none;
 }
 .icon-btn:hover { background: rgba(255,255,255,0.1); color: var(--text); }
 
@@ -157,25 +151,15 @@ tr:hover { background: rgba(255,255,255,0.02); }
 <div id="root"></div>
 
 <script>
-let state = {
-  admin: null,
-  tab: 'dashboard',
-  configs: [],
-  stats: null,
-  xrayStatus: null,
-};
+let state = { admin: null, tab: 'dashboard', configs: [], stats: null, xrayStatus: null };
 
 async function api(path, options = {}) {
   try {
     const opts = { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers||{}) } };
     if (options.body) opts.body = JSON.stringify(options.body);
     const res = await fetch(path, opts);
-    const data = await res.json();
-    return data;
-  } catch (e) {
-    console.error('API error:', path, e);
-    return { ok: false, error: 'خطای شبکه' };
-  }
+    return await res.json();
+  } catch (e) { return { ok: false, error: 'خطای شبکه' }; }
 }
 
 function toast(msg, type='success') {
@@ -199,16 +183,12 @@ async function login(username, password) {
     await loadStats();
     render();
     toast('خوش آمدید!');
-  } else {
-    toast(data.error || 'ورود ناموفق', 'error');
-  }
+  } else { toast(data.error || 'ورود ناموفق', 'error'); }
 }
 
 async function logout() {
   await api('/api/auth/logout', { method: 'POST' });
-  state.admin = null;
-  state.stats = null;
-  state.configs = [];
+  state.admin = null; state.stats = null; state.configs = [];
   render();
 }
 
@@ -243,47 +223,25 @@ function escapeHtml(s) {
 }
 
 function render() {
-  const root = document.getElementById('root');
-  if (!state.admin) {
-    root.innerHTML = renderLogin();
-    return;
-  }
-  root.innerHTML = renderApp();
+  document.getElementById('root').innerHTML = state.admin ? renderApp() : renderLogin();
 }
 
 function renderLogin() {
-  return `
-  <div class="login-wrapper">
-    <div class="glass login-card">
-      <div class="login-logo">☁️</div>
-      <h2 style="text-align:center; margin-bottom:8px; background:linear-gradient(135deg,#8b5cf6,#ec4899); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">FastApiCloud</h2>
-      <p style="text-align:center; color:var(--muted); margin-bottom:30px; font-size:13px;">پنل مدیریت کانفیگ‌های WS</p>
-      <form onsubmit="event.preventDefault(); login(this.username.value, this.password.value)">
-        <div class="form-group">
-          <label>نام کاربری</label>
-          <input name="username" value="admin" dir="ltr" autocomplete="username">
-        </div>
-        <div class="form-group">
-          <label>رمز عبور</label>
-          <input name="password" type="password" value="admin123" dir="ltr" autocomplete="current-password">
-        </div>
-        <button type="submit" class="btn btn-primary" style="width:100%; justify-content:center;">ورود به پنل</button>
-      </form>
-      <p style="text-align:center; margin-top:20px; font-size:11px; color:var(--muted);">
-        پیش‌فرض: <span dir="ltr" style="font-family:monospace">admin / admin123</span>
-      </p>
-    </div>
-  </div>`;
+  return `<div class="login-wrapper"><div class="glass login-card">
+    <div class="login-logo">☁️</div>
+    <h2 style="text-align:center; margin-bottom:8px; background:linear-gradient(135deg,#8b5cf6,#ec4899); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">FastApiCloud</h2>
+    <p style="text-align:center; color:var(--muted); margin-bottom:30px; font-size:13px;">پنل مدیریت کانفیگ‌های WS</p>
+    <form onsubmit="event.preventDefault(); login(this.username.value, this.password.value)">
+      <div class="form-group"><label>نام کاربری</label><input name="username" value="admin" dir="ltr"></div>
+      <div class="form-group"><label>رمز عبور</label><input name="password" type="password" value="admin123" dir="ltr"></div>
+      <button type="submit" class="btn btn-primary" style="width:100%; justify-content:center;">ورود به پنل</button>
+    </form>
+    <p style="text-align:center; margin-top:20px; font-size:11px; color:var(--muted);">پیش‌فرض: <span dir="ltr" style="font-family:monospace">admin / admin123</span></p>
+  </div></div>`;
 }
 
 function renderApp() {
-  return `
-  <div id="app">
-    ${renderSidebar()}
-    <div class="main">
-      ${renderTab()}
-    </div>
-  </div>`;
+  return `<div id="app">${renderSidebar()}<div class="main">${renderTab()}</div></div>`;
 }
 
 function renderSidebar() {
@@ -293,28 +251,13 @@ function renderSidebar() {
     { id: 'xray', label: 'سرور Xray', icon: '⚡' },
     { id: 'settings', label: 'تنظیمات', icon: '🔧' },
   ];
-  return `
-  <aside class="sidebar glass">
-    <div class="logo">
-      <div class="logo-icon">☁️</div>
-      <div>
-        <div style="font-weight:700;">FastApiCloud</div>
-        <div style="font-size:11px; color:var(--muted);">پنل مدیریت WS</div>
-      </div>
-    </div>
-    ${tabs.map(t => `
-      <div class="nav-item ${state.tab===t.id?'active':''}" onclick="setTab('${t.id}')">
-        <span>${t.icon}</span>
-        <span>${t.label}</span>
-      </div>
-    `).join('')}
+  return `<aside class="sidebar glass">
+    <div class="logo"><div class="logo-icon">☁️</div><div><div style="font-weight:700;">FastApiCloud</div><div style="font-size:11px; color:var(--muted);">پنل مدیریت WS</div></div></div>
+    ${tabs.map(t => `<div class="nav-item ${state.tab===t.id?'active':''}" onclick="setTab('${t.id}')"><span>${t.icon}</span><span>${t.label}</span></div>`).join('')}
     <div style="margin-top:30px; padding-top:20px; border-top:1px solid var(--border);">
       <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
         <div style="width:36px; height:36px; border-radius:50%; background:linear-gradient(135deg,#8b5cf6,#ec4899); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:13px;">${escapeHtml(state.admin.username.slice(0,2).toUpperCase())}</div>
-        <div>
-          <div style="font-size:13px; font-weight:600;">${escapeHtml(state.admin.username)}</div>
-          <div style="font-size:11px; color:var(--muted);" dir="ltr">${escapeHtml(state.admin.email||'')}</div>
-        </div>
+        <div><div style="font-size:13px; font-weight:600;">${escapeHtml(state.admin.username)}</div></div>
       </div>
       <button class="btn btn-ghost" style="width:100%; justify-content:center; font-size:12px;" onclick="logout()">خروج</button>
     </div>
@@ -322,15 +265,12 @@ function renderSidebar() {
 }
 
 async function setTab(id) {
-  state.tab = id;
-  render();
+  state.tab = id; render();
   try {
     if (id === 'dashboard') await loadStats();
     else if (id === 'configs') await loadConfigs();
     else if (id === 'xray') await loadXrayStatus();
-  } catch (e) {
-    console.error('Load error:', e);
-  }
+  } catch (e) { console.error(e); }
   render();
 }
 
@@ -344,167 +284,82 @@ function renderTab() {
   }
 }
 
-// ============================================================================
-// Dashboard — with traffic stats
-// ============================================================================
 function renderDashboard() {
   const s = state.stats;
-  if (!s) return '<div class="glass loading">در حال بارگذاری داشبورد...</div>';
-
-  const totalConfigs = (s.configs && s.configs.total) || 0;
-  const activeConfigs = (s.configs && s.configs.active) || 0;
+  if (!s) return '<div class="glass loading">در حال بارگذاری...</div>';
   const xray = s.xray || {};
-  const recentLogs = s.recentLogs || [];
-  const traffic = s.traffic || {upload: 0, download: 0, total: 0};
-  const showSeed = totalConfigs === 0;
-
+  const traffic = s.traffic || {upload:0, download:0, total:0};
   return `
-  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px;">
-    <div>
-      <h1 style="font-size:24px; margin-bottom:4px;">داشبورد</h1>
-      <p style="color:var(--muted); font-size:13px;">نمای کلی سیستم</p>
-    </div>
-    ${showSeed ? `<button class="btn btn-primary" onclick="seedData()">بارگذاری داده‌های نمونه</button>` : ''}
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+    <div><h1 style="font-size:22px;">داشبورد</h1><p style="color:var(--muted); font-size:12px;">نمای کلی سیستم</p></div>
+    ${s.configs.total === 0 ? `<button class="btn btn-primary" onclick="seedData()">بارگذاری داده‌های نمونه</button>` : ''}
   </div>
-
   <div class="stat-grid">
-    <div class="glass stat-card">
-      <div class="icon">⚙️</div>
-      <div class="label">کل کانفیگ‌ها</div>
-      <div class="value">${toPersian(totalConfigs)}</div>
-    </div>
-    <div class="glass stat-card">
-      <div class="icon">✅</div>
-      <div class="label">کانفیگ‌های فعال</div>
-      <div class="value" style="color:var(--success);">${toPersian(activeConfigs)}</div>
-    </div>
-    <div class="glass stat-card">
-      <div class="icon">📤</div>
-      <div class="label">آپلود کل</div>
-      <div class="value" style="color:var(--primary); font-size:18px;">${formatBytes(traffic.upload)}</div>
-    </div>
-    <div class="glass stat-card">
-      <div class="icon">📥</div>
-      <div class="label">دانلود کل</div>
-      <div class="value" style="color:var(--accent); font-size:18px;">${formatBytes(traffic.download)}</div>
-    </div>
-    <div class="glass stat-card">
-      <div class="icon">📊</div>
-      <div class="label">کل ترافیک</div>
-      <div class="value" style="font-size:18px; background:linear-gradient(135deg,#8b5cf6,#ec4899); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">${formatBytes(traffic.total)}</div>
-    </div>
+    <div class="glass stat-card"><div class="icon">⚙️</div><div class="label">کانفیگ‌ها</div><div class="value">${toPersian(s.configs.total)}</div></div>
+    <div class="glass stat-card"><div class="icon">✅</div><div class="label">فعال</div><div class="value" style="color:var(--success);">${toPersian(s.configs.active)}</div></div>
+    <div class="glass stat-card"><div class="icon">📤</div><div class="label">آپلود</div><div class="value" style="color:var(--primary); font-size:16px;">${formatBytes(traffic.upload)}</div></div>
+    <div class="glass stat-card"><div class="icon">📥</div><div class="label">دانلود</div><div class="value" style="color:var(--accent); font-size:16px;">${formatBytes(traffic.download)}</div></div>
+    <div class="glass stat-card"><div class="icon">📊</div><div class="label">کل ترافیک</div><div class="value" style="font-size:16px; background:linear-gradient(135deg,#8b5cf6,#ec4899); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">${formatBytes(traffic.total)}</div></div>
   </div>
-
-  <div class="glass" style="padding:20px; margin-bottom:24px;">
-    <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px;">
+  <div class="glass" style="padding:16px; margin-bottom:20px;">
+    <div style="display:flex; align-items:center; gap:12px;">
       <div style="width:40px; height:40px; border-radius:12px; background:linear-gradient(135deg,${xray.running?'#10b981':'#6b7280'},${xray.running?'#059669':'#4b5563'}); display:flex; align-items:center; justify-content:center; font-size:20px;">⚡</div>
-      <div>
-        <div style="font-weight:600;">سرور Xray محلی</div>
+      <div style="flex:1;">
+        <div style="font-weight:600; font-size:14px;">سرور Xray</div>
         <div style="font-size:12px; color:var(--muted); display:flex; align-items:center; gap:6px;">
-          <span class="pulse" style="width:8px; height:8px; border-radius:50%; background:${xray.running?'var(--success)':'var(--muted)'}; display:inline-block;"></span>
-          ${xray.running ? `در حال اجرا — ${toPersian(xray.client_count)} کلاینت فعال` : 'متوقف'}
+          <span class="pulse" style="width:8px; height:8px; border-radius:50%; background:${xray.running?'var(--success)':'var(--muted)'};"></span>
+          ${xray.running ? `در حال اجرا — ${toPersian(xray.client_count)} کلاینت` : 'متوقف'}
         </div>
       </div>
+      ${!xray.running ? `<button class="btn btn-success" onclick="startXray()">اجرای Xray</button>` : ''}
     </div>
-    ${!xray.running ? `<button class="btn btn-success" onclick="startXray()">اجرای Xray</button>` : ''}
-  </div>
-
-  <div class="glass" style="padding:20px;">
-    <h3 style="margin-bottom:16px;">فعالیت‌های اخیر</h3>
-    ${recentLogs.length === 0 ? '<p style="color:var(--muted); text-align:center; padding:20px;">هنوز فعالیتی ثبت نشده</p>' :
-      recentLogs.map(l => `
-        <div style="display:flex; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid var(--border);">
-          <div style="width:32px; height:32px; border-radius:8px; background:var(--card); display:flex; align-items:center; justify-content:center; font-size:14px;">
-            ${(l.action||'').includes('create')?'➕':(l.action||'').includes('delete')?'🗑️':(l.action||'').includes('xray')?'⚡':'✏️'}
-          </div>
-          <div style="flex:1;">
-            <div style="font-size:13px;">${escapeHtml(l.detail||l.action||'')}</div>
-            <div style="font-size:11px; color:var(--muted);">${formatDate(l.created_at)}</div>
-          </div>
-        </div>
-      `).join('')
-    }
   </div>`;
 }
 
 async function seedData() {
   const data = await api('/api/seed', { method: 'POST' });
-  if (data.ok) {
-    toast('داده‌های نمونه ایجاد شد');
-    await loadStats();
-    render();
-  } else {
-    toast(data.error || 'خطا', 'error');
-  }
+  if (data.ok) { toast('داده‌های نمونه ایجاد شد'); await loadStats(); render(); }
+  else toast(data.error || 'خطا', 'error');
 }
 
 async function startXray() {
   const data = await api('/api/xray/start', { method: 'POST' });
-  if (data.ok) {
-    toast('Xray اجرا شد');
-    await loadStats();
-    render();
-  } else {
-    toast(data.error || 'خطا', 'error');
-  }
+  if (data.ok) { toast('Xray اجرا شد'); await loadStats(); render(); }
+  else toast(data.error || 'خطا', 'error');
 }
 
-// ============================================================================
-// Configs — simplified, all-in-one form
-// ============================================================================
 function renderConfigs() {
   return `
-  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px;">
-    <div>
-      <h1 style="font-size:24px; margin-bottom:4px;">مدیریت کانفیگ‌ها</h1>
-      <p style="color:var(--muted); font-size:13px;">${toPersian(state.configs.length)} کانفیگ</p>
-    </div>
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+    <div><h1 style="font-size:22px;">کانفیگ‌ها</h1><p style="color:var(--muted); font-size:12px;">${toPersian(state.configs.length)} کانفیگ</p></div>
     <button class="btn btn-primary" onclick="showConfigForm()">➕ ساخت کانفیگ</button>
   </div>
   <div class="glass" style="overflow:hidden;">
     ${state.configs.length === 0 ? '<div class="loading">هیچ کانفیگی یافت نشد</div>' : `
-    <div style="overflow-x:auto;">
-    <table>
-      <thead>
-        <tr>
-          <th>نام</th><th>نوع</th><th>ترافیک</th><th>حجم</th><th>انقضا</th><th>وضعیت</th><th>Xray</th><th style="text-align:center;">عملیات</th>
-        </tr>
-      </thead>
+    <div style="overflow-x:auto;"><table>
+      <thead><tr><th>نام</th><th>نوع</th><th>ترافیک</th><th>حجم</th><th>انقضا</th><th>وضعیت</th><th style="text-align:center;">عملیات</th></tr></thead>
       <tbody>
         ${state.configs.map(c => {
           const dataLimit = c.data_limit > 0 ? formatBytes(c.data_limit) : 'نامحدود';
           const dataUsed = formatBytes(c.total_usage_bytes || 0);
           const usagePct = c.data_limit > 0 ? Math.min(100, (c.total_usage_bytes / c.data_limit) * 100) : 0;
-          return `
-          <tr>
-            <td>
-              <div style="font-weight:600;">${escapeHtml(c.name)}</div>
-              <div style="font-size:11px; color:var(--muted); font-family:monospace;" dir="ltr">${escapeHtml((c.uuid||'').slice(0,8))}...</div>
-            </td>
+          return `<tr>
+            <td><div style="font-weight:600;">${escapeHtml(c.name)}</div><div style="font-size:10px; color:var(--muted); font-family:monospace;" dir="ltr">${escapeHtml((c.uuid||'').slice(0,8))}...</div></td>
             <td><span class="badge badge-info">${escapeHtml((c.type||'').toUpperCase())}</span></td>
-            <td style="font-size:11px;">
-              <div>↑ ${formatBytes(c.upload_bytes||0)}</div>
-              <div>↓ ${formatBytes(c.download_bytes||0)}</div>
-            </td>
-            <td style="font-size:11px;">
-              <div>${dataUsed} / ${dataLimit}</div>
-              ${c.data_limit > 0 ? `<div style="height:4px; background:var(--card); border-radius:2px; margin-top:4px;"><div style="height:100%; background:${usagePct>90?'var(--danger)':usagePct>70?'var(--warning)':'var(--success)'}; border-radius:2px; width:${usagePct}%;"></div></div>` : ''}
-            </td>
-            <td style="font-size:11px;">${formatDate(c.expires_at)}</td>
+            <td style="font-size:10px;"><div>↑ ${formatBytes(c.upload_bytes||0)}</div><div>↓ ${formatBytes(c.download_bytes||0)}</div></td>
+            <td style="font-size:10px;">${dataUsed} / ${dataLimit}${c.data_limit > 0 ? `<div style="height:3px; background:var(--card); border-radius:2px; margin-top:3px;"><div style="height:100%; background:${usagePct>90?'var(--danger)':usagePct>70?'var(--warning)':'var(--success)'}; border-radius:2px; width:${usagePct}%;"></div></div>` : ''}</td>
+            <td style="font-size:10px;">${formatDate(c.expires_at)}</td>
             <td>${c.status==='active'?'<span class="badge badge-success">فعال</span>':'<span class="badge badge-warning">غیرفعال</span>'}</td>
-            <td>${c.xray_active?'<span class="badge badge-success">فعال</span>':'<span class="badge badge-warning">—</span>'}</td>
             <td style="text-align:center; white-space:nowrap;">
-              <button class="icon-btn" onclick="showQR('${c.id}')" title="QR">📱</button>
-              <button class="icon-btn" onclick="showShareLink('${c.id}')" title="لینک">🔗</button>
-              <button class="icon-btn" onclick="showConfigForm('${c.id}')" title="ویرایش">✏️</button>
-              <button class="icon-btn" onclick="deleteConfig('${c.id}')" title="حذف">🗑️</button>
+              <button class="icon-btn" onclick="showQR('${c.id}')">📱</button>
+              <button class="icon-btn" onclick="showShareLink('${c.id}')">🔗</button>
+              <button class="icon-btn" onclick="showConfigForm('${c.id}')">✏️</button>
+              <button class="icon-btn" onclick="deleteConfig('${c.id}')">🗑️</button>
             </td>
           </tr>`;
         }).join('')}
       </tbody>
-    </table>
-    </div>
-    `}
+    </table></div>`}
   </div>`;
 }
 
@@ -513,239 +368,127 @@ async function showConfigForm(id) {
   const currentType = c?.type || 'vmess';
   const dataLimitGB = c ? Math.round((c.data_limit||0) / 1073741824) : 0;
   const expireDays = c?.expires_at ? Math.max(0, Math.ceil((new Date(c.expires_at) - new Date()) / (1000*60*60*24))) : 0;
-
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
-  modal.innerHTML = `
-  <div class="modal">
-    <div class="modal-header">
-      <h3>${c?'ویرایش':'ساخت'} کانفیگ</h3>
-      <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button>
-    </div>
+  modal.innerHTML = `<div class="modal">
+    <div class="modal-header"><h3>${c?'ویرایش':'ساخت'} کانفیگ</h3><button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button></div>
     <form id="configForm">
-      <div class="form-group">
-        <label>نوع پروتکل</label>
+      <div class="form-group"><label>نوع پروتکل</label>
         <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:8px;" id="typeButtons">
-          ${['vmess','vless','trojan'].map(t => `
-            <button type="button" data-type="${t}" onclick="selectType('${t}')"
-              style="padding:12px; border-radius:12px; background:${currentType===t?'linear-gradient(135deg,#8b5cf6,#ec4899)':'var(--card)'}; color:${currentType===t?'white':'var(--text)'}; font-size:13px; font-weight:600; border:none; cursor:pointer;">
-              ${t.toUpperCase()}
-            </button>
-          `).join('')}
+          ${['vmess','vless','trojan'].map(t => `<button type="button" data-type="${t}" onclick="selectType('${t}')" style="padding:10px; border-radius:10px; background:${currentType===t?'linear-gradient(135deg,#8b5cf6,#ec4899)':'var(--card)'}; color:${currentType===t?'white':'var(--text)'}; font-size:12px; font-weight:600; border:none; cursor:pointer;">${t.toUpperCase()}</button>`).join('')}
         </div>
         <input type="hidden" name="type" value="${currentType}">
       </div>
-      <div class="form-group">
-        <label>نام کانفیگ</label>
-        <input name="name" value="${escapeHtml(c?.name||'')}" required placeholder="مثلا: ali-vmess">
-      </div>
-      <div class="form-group">
-        <label>UUID</label>
-        <div style="display:flex; gap:8px;">
-          <input name="uuid" value="${escapeHtml(c?.uuid||'')}" dir="ltr" style="flex:1;" placeholder="تولید خودکار">
-          <button type="button" class="btn btn-ghost" onclick="generateUuid(this)">تولید</button>
-        </div>
-      </div>
+      <div class="form-group"><label>نام کانفیگ</label><input name="name" value="${escapeHtml(c?.name||'')}" required placeholder="مثلا: ali-vmess"></div>
+      <div class="form-group"><label>UUID</label><div style="display:flex; gap:8px;"><input name="uuid" value="${escapeHtml(c?.uuid||'')}" dir="ltr" style="flex:1;" placeholder="تولید خودکار"><button type="button" class="btn btn-ghost" onclick="generateUuid(this)">تولید</button></div></div>
       <div class="form-row">
-        <div class="form-group">
-          <label>سقف حجم (GB)</label>
-          <input name="dataLimit" type="number" value="${dataLimitGB}" dir="ltr" min="0" placeholder="۰ = نامحدود">
-        </div>
-        <div class="form-group">
-          <label>مدت اعتبار (روز)</label>
-          <input name="expireDays" type="number" value="${expireDays}" dir="ltr" min="0" placeholder="۰ = نامحدود">
-        </div>
+        <div class="form-group"><label>سقف حجم (GB)</label><input name="dataLimit" type="number" value="${dataLimitGB}" dir="ltr" min="0" placeholder="۰ = نامحدود"></div>
+        <div class="form-group"><label>مدت اعتبار (روز)</label><input name="expireDays" type="number" value="${expireDays}" dir="ltr" min="0" placeholder="۰ = نامحدود"></div>
       </div>
-      <div class="form-group">
-        <label>وضعیت</label>
-        <select name="status">
-          <option value="active" ${c?.status==='active'?'selected':''}>فعال</option>
-          <option value="disabled" ${c?.status==='disabled'?'selected':''}>غیرفعال</option>
-        </select>
-      </div>
-      <div style="background:var(--card); padding:12px; border-radius:12px; margin-bottom:16px; font-size:11px; color:var(--muted);">
-        🌐 سرور: <span dir="ltr" style="font-family:monospace; color:var(--primary);">${escapeHtml(window.location.hostname)}</span>
-        — پورت: <span dir="ltr" style="font-family:monospace; color:var(--primary);">۴۴۳</span>
-      </div>
+      <div class="form-group"><label>وضعیت</label><select name="status"><option value="active" ${c?.status==='active'?'selected':''}>فعال</option><option value="disabled" ${c?.status==='disabled'?'selected':''}>غیرفعال</option></select></div>
+      <div style="background:var(--card); padding:10px; border-radius:10px; margin-bottom:14px; font-size:11px; color:var(--muted);">🌐 سرور: <span dir="ltr" style="font-family:monospace; color:var(--primary);">${escapeHtml(window.location.hostname)}</span> — پورت: <span style="color:var(--primary);">۴۴۳</span></div>
       <button type="submit" class="btn btn-primary" style="width:100%; justify-content:center;">${c?'ذخیره':'ساخت'}</button>
     </form>
   </div>`;
   document.body.appendChild(modal);
-
-  document.getElementById('configForm').onsubmit = async function(e) {
-    e.preventDefault();
-    await saveConfig(this, id);
-  };
+  document.getElementById('configForm').onsubmit = async function(e) { e.preventDefault(); await saveConfig(this, id); };
 }
 
 function selectType(t) {
   document.querySelector('#configForm input[name="type"]').value = t;
   document.querySelectorAll('#typeButtons button').forEach(btn => {
-    if (btn.dataset.type === t) {
-      btn.style.background = 'linear-gradient(135deg,#8b5cf6,#ec4899)';
-      btn.style.color = 'white';
-    } else {
-      btn.style.background = 'var(--card)';
-      btn.style.color = 'var(--text)';
-    }
+    if (btn.dataset.type === t) { btn.style.background = 'linear-gradient(135deg,#8b5cf6,#ec4899)'; btn.style.color = 'white'; }
+    else { btn.style.background = 'var(--card)'; btn.style.color = 'var(--text)'; }
   });
 }
 
 function generateUuid(btn) {
   let uuid;
-  if (window.crypto && window.crypto.randomUUID) {
-    uuid = window.crypto.randomUUID();
-  } else {
-    uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(cc) {
-      const r = Math.random() * 16 | 0;
-      const v = cc === 'x' ? r : (r & 0x3 | 0x8);
-      return v.toString(16);
-    });
-  }
+  if (window.crypto && window.crypto.randomUUID) uuid = window.crypto.randomUUID();
+  else uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random()*16|0; return (c==='x'?r:(r&0x3|0x8)).toString(16); });
   btn.previousElementSibling.value = uuid;
 }
 
 async function saveConfig(form, id) {
-  const data = {
-    name: form.name.value,
-    type: form.type.value,
-    uuid: form.uuid.value,
-    dataLimit: Number(form.dataLimit.value) || 0,
-    expireDays: Number(form.expireDays.value) || 0,
-    status: form.status.value,
-  };
+  const data = { name: form.name.value, type: form.type.value, uuid: form.uuid.value, dataLimit: Number(form.dataLimit.value)||0, expireDays: Number(form.expireDays.value)||0, status: form.status.value };
   if (!data.name) { toast('نام الزامی است', 'error'); return; }
-
   const url = id ? `/api/configs/${id}` : '/api/configs';
   const method = id ? 'PUT' : 'POST';
   const res = await api(url, { method, body: data });
-  if (res.ok) {
-    form.closest('.modal-overlay').remove();
-    toast(id ? 'کانفیگ به‌روزرسانی شد' : 'کانفیگ ساخته شد');
-    await loadConfigs();
-    render();
-  } else {
-    toast(res.error || 'خطا', 'error');
-  }
+  if (res.ok) { form.closest('.modal-overlay').remove(); toast(id ? 'به‌روزرسانی شد' : 'ساخته شد'); await loadConfigs(); render(); }
+  else toast(res.error || 'خطا', 'error');
 }
 
 async function deleteConfig(id) {
   if (!confirm('حذف این کانفیگ؟')) return;
   const res = await api(`/api/configs/${id}`, { method: 'DELETE' });
-  if (res.ok) {
-    toast('حذف شد');
-    await loadConfigs();
-    render();
-  } else {
-    toast(res.error || 'خطا', 'error');
-  }
+  if (res.ok) { toast('حذف شد'); await loadConfigs(); render(); }
+  else toast(res.error || 'خطا', 'error');
 }
 
 async function showQR(id) {
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
-  modal.innerHTML = `
-  <div class="modal" style="text-align:center;">
+  modal.innerHTML = `<div class="modal" style="text-align:center;">
     <div class="modal-header"><h3>QR Code</h3><button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button></div>
-    <div class="qr-container"><img src="/api/qr?id=${id}&t=${Date.now()}" width="256" height="256" onerror="this.parentElement.innerHTML='<p>خطا در تولید QR</p>'"></div>
-    <p style="margin-top:16px; font-size:12px; color:var(--muted);">برای وارد کردن در V2Ray اسکن کنید</p>
+    <div class="qr-container"><img src="/api/qr?id=${id}&t=${Date.now()}" width="256" height="256"></div>
+    <p style="margin-top:14px; font-size:11px; color:var(--muted);">برای V2Ray اسکن کنید</p>
   </div>`;
   document.body.appendChild(modal);
 }
 
 async function showShareLink(id) {
   const data = await api(`/api/configs/${id}`);
-  if (!data.ok) { toast('خطا در دریافت لینک', 'error'); return; }
+  if (!data.ok) { toast('خطا', 'error'); return; }
   const link = data.shareLink;
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
-  modal.innerHTML = `
-  <div class="modal">
+  modal.innerHTML = `<div class="modal">
     <div class="modal-header"><h3>لینک اشتراک</h3><button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button></div>
-    <div style="background:var(--card); padding:14px; border-radius:12px; margin-bottom:16px; word-break:break-all; font-family:monospace; font-size:11px;" dir="ltr">${escapeHtml(link)}</div>
-    <button class="btn btn-primary" style="width:100%; justify-content:center;" onclick="copyToClipboard('${escapeHtml(link)}')">کپی لینک</button>
+    <div style="background:var(--card); padding:12px; border-radius:10px; margin-bottom:14px; word-break:break-all; font-family:monospace; font-size:10px;" dir="ltr">${escapeHtml(link)}</div>
+    <button class="btn btn-primary" style="width:100%; justify-content:center;" onclick="navigator.clipboard.writeText('${escapeHtml(link)}').then(()=>toast('کپی شد'))">کپی لینک</button>
   </div>`;
   document.body.appendChild(modal);
 }
 
-function copyToClipboard(text) {
-  navigator.clipboard.writeText(text).then(() => toast('کپی شد')).catch(() => toast('خطا در کپی', 'error'));
-}
-
-// ============================================================================
-// Xray
-// ============================================================================
 function renderXray() {
   const s = state.xrayStatus;
   if (!s) return '<div class="glass loading">در حال بارگذاری...</div>';
   return `
-  <div style="margin-bottom:24px;">
-    <h1 style="font-size:24px; margin-bottom:4px;">سرور Xray محلی</h1>
-    <p style="color:var(--muted); font-size:13px;">مدیریت اجرای Xray-core روی همین سرور</p>
-  </div>
-  <div class="glass" style="padding:24px; margin-bottom:24px;">
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:12px;">
-      <div style="display:flex; align-items:center; gap:16px;">
-        <div style="width:56px; height:56px; border-radius:16px; background:linear-gradient(135deg,${s.running?'#10b981,#059669':'#6b7280,#4b5563'}); display:flex; align-items:center; justify-content:center; font-size:28px;">⚡</div>
-        <div>
-          <div style="font-weight:700; font-size:18px;">${s.running?'در حال اجرا':'متوقف'}</div>
-          <div style="font-size:12px; color:var(--muted); display:flex; align-items:center; gap:6px;">
-            <span class="pulse" style="width:8px; height:8px; border-radius:50%; background:${s.running?'var(--success)':'var(--muted)'}; display:inline-block;"></span>
-            ${s.running ? `PID: ${toPersian(s.pid)}` : 'Xray اجرا نشده'}
-          </div>
-        </div>
+  <div style="margin-bottom:20px;"><h1 style="font-size:22px;">سرور Xray</h1><p style="color:var(--muted); font-size:12px;">مدیریت Xray-core</p></div>
+  <div class="glass" style="padding:20px; margin-bottom:20px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; flex-wrap:wrap; gap:12px;">
+      <div style="display:flex; align-items:center; gap:14px;">
+        <div style="width:52px; height:52px; border-radius:14px; background:linear-gradient(135deg,${s.running?'#10b981,#059669':'#6b7280,#4b5563'}); display:flex; align-items:center; justify-content:center; font-size:26px;">⚡</div>
+        <div><div style="font-weight:700; font-size:16px;">${s.running?'در حال اجرا':'متوقف'}</div>
+        <div style="font-size:11px; color:var(--muted); display:flex; align-items:center; gap:6px;"><span class="pulse" style="width:8px; height:8px; border-radius:50%; background:${s.running?'var(--success)':'var(--muted)'};"></span>${s.running ? `PID: ${toPersian(s.pid)}` : 'اجرا نشده'}</div></div>
       </div>
-      <div>
-        ${s.running ? `
-          <button class="btn btn-ghost" onclick="restartXray()" style="margin-left:8px;">🔄 Restart</button>
-          <button class="btn btn-danger" onclick="stopXray()">⏹ توقف</button>
-        ` : `
-          <button class="btn btn-success" onclick="startXray2()" ${!s.xray_bin_exists?'disabled':''}>▶ اجرای Xray</button>
-        `}
-      </div>
+      <div>${s.running ? `<button class="btn btn-ghost" onclick="restartXray()" style="margin-left:8px;">🔄 Restart</button><button class="btn btn-danger" onclick="stopXray()">⏹ توقف</button>` : `<button class="btn btn-success" onclick="startXray2()" ${!s.xray_bin_exists?'disabled':''}>▶ اجرای Xray</button>`}</div>
     </div>
     <div class="stat-grid" style="margin-bottom:0;">
-      <div class="glass stat-card"><div class="icon">🌐</div><div class="label">آدرس اتصال</div><div class="value" style="font-size:14px; font-family:monospace;" dir="ltr">${escapeHtml(s.public_host||'')}:${s.public_port}</div></div>
+      <div class="glass stat-card"><div class="icon">🌐</div><div class="label">آدرس</div><div class="value" style="font-size:13px; font-family:monospace;" dir="ltr">${escapeHtml(s.public_host||'')}:${s.public_port}</div></div>
       <div class="glass stat-card"><div class="icon">👥</div><div class="label">کلاینت‌ها</div><div class="value">${toPersian(s.client_count||0)}</div></div>
-      <div class="glass stat-card"><div class="icon">📦</div><div class="label">Xray Binary</div><div class="value" style="font-size:14px;">${s.xray_bin_exists?'✅ نصب':'❌ ناموجود'}</div></div>
+      <div class="glass stat-card"><div class="icon">📦</div><div class="label">Binary</div><div class="value" style="font-size:13px;">${s.xray_bin_exists?'✅':'❌'}</div></div>
     </div>
   </div>
-  <div style="display:flex; gap:12px;">
-    <button class="btn btn-ghost" onclick="showConfigPreview()">📄 preview config.json</button>
-    <button class="btn btn-ghost" onclick="showLogs()">📝 مشاهده لاگ‌ها</button>
-  </div>`;
+  <div style="display:flex; gap:12px;"><button class="btn btn-ghost" onclick="showConfigPreview()">📄 config.json</button><button class="btn btn-ghost" onclick="showLogs()">📝 لاگ‌ها</button></div>`;
 }
 
 async function startXray2() {
   const data = await api('/api/xray/start', { method: 'POST' });
-  if (data.ok) {
-    toast('Xray اجرا شد');
-    await loadXrayStatus();
-    render();
-  } else {
-    toast(data.error || 'خطا', 'error');
-  }
+  if (data.ok) { toast('Xray اجرا شد'); await loadXrayStatus(); render(); }
+  else toast(data.error || 'خطا', 'error');
 }
 async function stopXray() {
   if (!confirm('توقف Xray؟')) return;
   const data = await api('/api/xray/stop', { method: 'POST' });
-  if (data.ok) {
-    toast('متوقف شد');
-    await loadXrayStatus();
-    render();
-  } else {
-    toast(data.error || 'خطا', 'error');
-  }
+  if (data.ok) { toast('متوقف شد'); await loadXrayStatus(); render(); }
+  else toast(data.error || 'خطا', 'error');
 }
 async function restartXray() {
   const data = await api('/api/xray/restart', { method: 'POST' });
-  if (data.ok) {
-    toast('Restart شد');
-    await loadXrayStatus();
-    render();
-  } else {
-    toast(data.error || 'خطا', 'error');
-  }
+  if (data.ok) { toast('Restart شد'); await loadXrayStatus(); render(); }
+  else toast(data.error || 'خطا', 'error');
 }
 
 async function showConfigPreview() {
@@ -753,81 +496,45 @@ async function showConfigPreview() {
   if (!data.ok) { toast('خطا', 'error'); return; }
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
-  modal.innerHTML = `
-  <div class="modal" style="max-width:700px;">
-    <div class="modal-header"><h3>config.json</h3><button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button></div>
-    <pre style="background:var(--card); padding:16px; border-radius:12px; overflow:auto; font-size:11px; max-height:60vh; white-space:pre-wrap; color:var(--muted);" dir="ltr">${escapeHtml(JSON.stringify(data.config, null, 2))}</pre>
-  </div>`;
+  modal.innerHTML = `<div class="modal" style="max-width:700px;"><div class="modal-header"><h3>config.json</h3><button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button></div>
+  <pre style="background:var(--card); padding:14px; border-radius:10px; overflow:auto; font-size:10px; max-height:60vh; white-space:pre-wrap; color:var(--muted);" dir="ltr">${escapeHtml(JSON.stringify(data.config, null, 2))}</pre></div>`;
   document.body.appendChild(modal);
 }
 
 async function showLogs() {
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
-  modal.innerHTML = `
-  <div class="modal" style="max-width:700px;">
-    <div class="modal-header"><h3>لاگ‌های Xray</h3><button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button></div>
-    <div id="logsContent" style="background:var(--card); padding:16px; border-radius:12px; overflow:auto; font-size:11px; max-height:60vh; white-space:pre-wrap; color:var(--muted);" dir="ltr">در حال بارگذاری...</div>
-  </div>`;
+  modal.innerHTML = `<div class="modal" style="max-width:700px;"><div class="modal-header"><h3>لاگ‌های Xray</h3><button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button></div>
+  <div id="logsContent" style="background:var(--card); padding:14px; border-radius:10px; overflow:auto; font-size:10px; max-height:60vh; white-space:pre-wrap; color:var(--muted);" dir="ltr">در حال بارگذاری...</div></div>`;
   document.body.appendChild(modal);
   const data = await api('/api/xray/logs?lines=100');
-  document.getElementById('logsContent').textContent = data.ok ? (data.content || '(خالی)') : 'خطا در بارگذاری';
+  document.getElementById('logsContent').textContent = data.ok ? (data.content || '(خالی)') : 'خطا';
 }
 
-// ============================================================================
-// Settings
-// ============================================================================
 function renderSettings() {
   return `
-  <div style="margin-bottom:24px;">
-    <h1 style="font-size:24px; margin-bottom:4px;">تنظیمات</h1>
-    <p style="color:var(--muted); font-size:13px;">مدیریت حساب و سیستم</p>
+  <div style="margin-bottom:20px;"><h1 style="font-size:22px;">تنظیمات</h1><p style="color:var(--muted); font-size:12px;">مدیریت حساب</p></div>
+  <div class="glass" style="padding:20px; margin-bottom:14px;">
+    <h3 style="margin-bottom:14px;">اطلاعات حساب</h3>
+    <div style="display:flex; justify-content:space-between; padding:10px; background:var(--card); border-radius:10px; margin-bottom:6px;"><span style="color:var(--muted);">نام کاربری</span><span style="font-family:monospace;" dir="ltr">${escapeHtml(state.admin.username)}</span></div>
   </div>
-  <div class="glass" style="padding:24px; margin-bottom:16px;">
-    <h3 style="margin-bottom:16px;">اطلاعات حساب</h3>
-    <div style="display:flex; justify-content:space-between; padding:12px; background:var(--card); border-radius:12px; margin-bottom:8px;">
-      <span style="color:var(--muted);">نام کاربری</span><span style="font-family:monospace;" dir="ltr">${escapeHtml(state.admin.username)}</span>
-    </div>
-    <div style="display:flex; justify-content:space-between; padding:12px; background:var(--card); border-radius:12px; margin-bottom:8px;">
-      <span style="color:var(--muted);">ایمیل</span><span style="font-family:monospace;" dir="ltr">${escapeHtml(state.admin.email||'—')}</span>
-    </div>
+  <div class="glass" style="padding:20px; margin-bottom:14px;">
+    <h3 style="margin-bottom:14px;">تغییر رمز عبور</h3>
+    <form id="passwordForm"><div class="form-group"><label>رمز جدید</label><input name="newPassword" type="password" dir="ltr" required></div><button type="submit" class="btn btn-primary">تغییر رمز</button></form>
   </div>
-  <div class="glass" style="padding:24px; margin-bottom:16px;">
-    <h3 style="margin-bottom:16px;">تغییر رمز عبور</h3>
-    <form id="passwordForm">
-      <div class="form-group"><label>رمز جدید</label><input name="newPassword" type="password" dir="ltr" required></div>
-      <button type="submit" class="btn btn-primary">تغییر رمز</button>
-    </form>
-  </div>
-  <div class="glass" style="padding:24px;">
-    <h3 style="margin-bottom:16px;">اطلاعات سیستم</h3>
-    <div style="display:flex; justify-content:space-between; padding:12px; background:var(--card); border-radius:12px; margin-bottom:8px;">
-      <span style="color:var(--muted);">نسخه</span><span style="font-family:monospace;" dir="ltr">v2.0.0 Python</span>
-    </div>
-    <div style="display:flex; justify-content:space-between; padding:12px; background:var(--card); border-radius:12px; margin-bottom:8px;">
-      <span style="color:var(--muted);">پروتکل‌ها</span><span>VMess · VLESS · Trojan</span>
-    </div>
-    <div style="display:flex; justify-content:space-between; padding:12px; background:var(--card); border-radius:12px;">
-      <span style="color:var(--muted);">دیتابیس</span><span>SQLite + gRPC API</span>
-    </div>
+  <div class="glass" style="padding:20px;">
+    <h3 style="margin-bottom:14px;">سیستم</h3>
+    <div style="display:flex; justify-content:space-between; padding:10px; background:var(--card); border-radius:10px; margin-bottom:6px;"><span style="color:var(--muted);">نسخه</span><span style="font-family:monospace;" dir="ltr">v3.0.0 aiohttp</span></div>
+    <div style="display:flex; justify-content:space-between; padding:10px; background:var(--card); border-radius:10px;"><span style="color:var(--muted);">پروتکل‌ها</span><span>VMess · VLESS · Trojan</span></div>
   </div>`;
 }
 
-// ============================================================================
-// Init
-// ============================================================================
 checkAuth();
-
 setInterval(async () => {
   if (!state.admin) return;
-  if (state.tab === 'dashboard') {
-    await loadStats();
-    render();
-  } else if (state.tab === 'xray') {
-    await loadXrayStatus();
-    render();
-  }
-}, 10000);
+  if (state.tab === 'dashboard') { await loadStats(); render(); }
+  else if (state.tab === 'xray') { await loadXrayStatus(); render(); }
+}, 15000);
 
 document.addEventListener('submit', async function(e) {
   if (e.target.id === 'passwordForm') {
