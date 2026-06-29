@@ -1,177 +1,274 @@
-<div dir="rtl" align="right">
+# FastApiCloud WS Config Panel
 
-# پنل سبک مدیریت Xray — مخصوص Bunnyshell
+پنل مدیریتی پیشرفته برای ساخت و مدیریت کانفیگ‌های **V2Ray/Xray WebSocket** — با اجرای محلی Xray-core روی همان سرور سایت.
 
-یک پنل مدیریت **سفارشی و سبک** برای هسته‌ی Xray، با رابط کاربری **فارسی (RTL)** و نمایش **لاگ‌های زنده**. این پنل به‌جای استفاده از پنل‌های سنگین مثل 3x-ui، با Flask و Xray-core مستقیماً ساخته شده و برای محیط‌های تک‌پورتی مثل Bunnyshell بهینه است.
-
-## 🎯 چرا این پنل؟
-
-پنل‌های آماده مثل 3x-ui مشکلاتی در محیط‌های PaaS تک‌پورتی دارند:
-- تداخل پورت بین پنل و Inbound
-- مسیریابی پیچیده‌ی fallback
-- حجم زیاد تصویر Docker
-- عدم شفافیت در لاگ‌ها
-
-این پنل سفارشی همه‌ی این مشکلات را با معماری ساده حل می‌کند:
-
-```
-                Bunnyshell Edge (HTTPS:443)
-                            ↓
-              ┌─────────────────────────────┐
-              │   Container (Port 80)        │
-              │   ┌─────────────────────┐    │
-              │   │   Xray-core         │    │
-              │   │   - VLESS+WS /vless │    │
-              │   │   - Fallback ────┐  │    │
-              │   └──────────────────│─┘    │
-              │                      ↓      │
-              │   ┌─────────────────────┐    │
-              │   │   Flask Panel       │    │
-              │   │   (127.0.0.1:5000)  │    │
-              │   │   - Login           │    │
-              │   │   - Dashboard       │    │
-              │   │   - Logs (live)     │    │
-              │   └─────────────────────┘    │
-              └─────────────────────────────┘
-```
+![FastApiCloud](https://img.shields.io/badge/FastApiCloud-Panel-purple)
+![Next.js](https://img.shields.io/badge/Next.js-16-black)
+![TypeScript](https://img.shields.io/badge/TypeScript-5-blue)
+![Xray](https://img.shields.io/badge/Xray-core-26.3-green)
 
 ## ✨ ویژگی‌ها
 
-- 🎨 **رابط فارسی RTL** با تم تیره
-- 🔐 **احراز هویت** با نام کاربری و رمز عبور
-- 👥 **مدیریت کاربران** (افزودن، حذف، فعال/غیرفعال)
-- 🔗 **تولید لینک VLESS** آماده‌ی کپی
-- 📋 **لاگ‌های زنده** (SSE) برای Xray access و error logs
-- 🔄 **بارگذاری مجدد Xray** با یک کلیک
-- 📊 **آمار** تعداد کاربران و وضعیت سرور
-- 🪶 **تصویر سبک** (Alpine + Xray + Python فقط)
-- 🎯 **تک‌پورت** (فقط پورت 80) — مخصوص Bunnyshell
-- 🇮🇷 **منطقه‌ی زمانی تهران**
+- 🔐 **احراز هویت ادمین** با bcrypt + session cookie
+- ⚙️ **CRUD کامل کانفیگ‌ها** برای VMess / VLESS / Trojan با WebSocket
+- 🚀 **اجرای محلی Xray** — Xray-core مستقیماً روی همان سرور سایت اجرا می‌شود
+- 🔄 **Auto-sync** — تغییرات کانفیگ خودکار در config.json اعمال می‌شوند
+- 📱 **QR Code** و **Share Link** خودکار برای هر کانفیگ
+- 📥 خروجی **inbound.json** و **Clash YAML**
+- 🌐 **مدیریت سرورها** و **کاربران** با سقف داده و تاریخ انقضا
+- 📊 **داشبورد آماری** با نمودارهای تعاملی
+- 🎨 طراحی **Glassmorphism** با تم تیره و گرادیان بنفش/آبی
+- 🇮🇷 کاملاً **فارسی RTL** با فونت Vazirmatn
 
-## 📦 ساختار پروژه
+## 🛠 تکنولوژی‌ها
 
+- **Frontend**: Next.js 16 + TypeScript + Tailwind CSS 4 + shadcn/ui
+- **Backend**: Next.js API Routes + Prisma ORM + SQLite
+- **Xray**: Xray-core v26+ (به صورت subprocess)
+- **Charts**: Recharts
+- **Auth**: bcryptjs + custom session
+- **QR**: qrcode library
+
+## 🚀 نصب و راه‌اندازی
+
+### پیش‌نیازها
+
+- Node.js 18+ یا Bun
+- macOS, Linux, یا WSL
+- OpenSSL (برای تولید cert)
+
+### روش سریع
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/YOUR_USERNAME/fastapicloud-ws-panel.git
+cd fastapicloud-ws-panel
+
+# 2. Run setup script (downloads Xray, installs deps, sets up DB)
+chmod +x setup.sh
+./setup.sh
+
+# 3. Start the dev server
+bun run dev    # or: npm run dev
 ```
-xray-custom-panel/
-├── Dockerfile                  # Alpine + Xray + Python
-├── docker-compose.yml          # برای تست محلی
-├── bunnyshell.yaml             # تنظیمات Bunnyshell
-├── entrypoint.sh               # راه‌اندازی Flask + Xray
-├── requirements.txt            # وابستگی‌های Python
-├── generate_config.py          # تولید config.json از DB
-├── xray_config.template.json   # قالب پیکربندی Xray
-├── panel/
-│   ├── app.py                  # برنامه‌ی اصلی Flask
-│   ├── init_db.py              # راه‌اندازی پایگاه داده
-│   └── templates/
-│       ├── base.html           # قالب پایه (تم تیره)
-│       ├── login.html          # صفحه‌ی ورود
-│       ├── dashboard.html      # داشبورد + لیست کاربران
-│       ├── link.html           # نمایش لینک VLESS
-│       ├── logs.html           # نمایش لاگ‌ها
-│       └── error.html          # صفحات خطا
-└── README.md
+
+سپس به http://localhost:3000 بروید و با `admin / admin123` وارد شوید.
+
+### روش دستی
+
+```bash
+# Install dependencies
+bun install    # or: npm install
+
+# Download Xray binary
+mkdir -p bin xray-data
+# Linux 64-bit:
+curl -L -o /tmp/xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
+unzip /tmp/xray.zip -d /tmp/xray-extracted
+cp /tmp/xray-extracted/xray bin/xray
+cp /tmp/xray-extracted/geoip.dat xray-data/
+cp /tmp/xray-extracted/geosite.dat xray-data/
+chmod +x bin/xray
+
+# Generate self-signed cert
+openssl req -x509 -newkey rsa:2048 -nodes \
+  -keyout xray-data/key.pem \
+  -out xray-data/cert.pem \
+  -days 365 \
+  -subj "/CN=fastapicloud.com" \
+  -addext "subjectAltName=DNS:fastapicloud.com,DNS:*.fastapicloud.com"
+
+# Create .env
+cat > .env << 'EOF'
+DATABASE_URL=file:./db/custom.db
+XRAY_PUBLIC_HOST=fastapicloud.com
+XRAY_PUBLIC_PORT=8443
+XRAY_TLS_ENABLED=true
+XRAY_CERT_PATH=xray-data/cert.pem
+XRAY_KEY_PATH=xray-data/key.pem
+EOF
+
+# Setup database
+bunx prisma db push --accept-data-loss
+bunx prisma generate
+
+# Start dev server
+bun run dev
 ```
-
-## 🚀 استقرار روی Bunnyshell
-
-### ۱. آپلود به GitHub
-
-تمام فایل‌ها را در یک مخزن GitHub آپلود کنید.
-
-### ۲. ساخت Environment در Bunnyshell
-
-1. وارد [bunnyshell.com](https://bunnyshell.com) شوید
-2. **Environments** → **Create Environment**
-3. مخزن GitHub خود را انتخاب کنید
-4. Bunnyshell به‌صورت خودکار `bunnyshell.yaml` را می‌خواند
-5. روی **Create** کلیک کنید
-
-### ۳. تنظیم متغیرهای محیطی
-
-در پنل Bunnyshell، این متغیرها را تنظیم کنید:
-
-| متغیر | نوع | توضیح |
-|-------|-----|-------|
-| `ADMIN_USER` | VAR | نام کاربری مدیر (پیش‌فرض: admin) |
-| `ADMIN_PASS` | SECRET | رمز عبور مدیر |
-| `PANEL_SECRET` | SECRET | کلید امنیتی session |
-| `PUBLIC_DOMAIN` | VAR | دامنه‌ی Bunnyshell شما (مثل `xxx.bunnyenv.com`) |
-| `XRAY_WS_PATH` | VAR | مسیر WebSocket (پیش‌فرض: /vless) |
-
-### ۴. Deploy
-
-روی **Deploy** کلیک کنید و صبر کنید Pod سبز شود.
 
 ## 📖 استفاده
 
-### ورود به پنل
+### 1. ورود به پنل
+- آدرس: http://localhost:3000
+- نام کاربری: `admin`
+- رمز عبور: `admin123`
 
-به آدرس زیر بروید:
+### 2. بارگذاری داده‌های نمونه (اختیاری)
+در داشبورد، روی **«بارگذاری داده‌های نمونه»** کلیک کنید تا ۳ سرور، ۳ کاربر و ۵ کانفیگ نمونه ایجاد شوند.
+
+### 3. اجرای Xray
+به بخش **تنظیمات** بروید و در قسمت **«سرور Xray محلی»** روی **«اجرای Xray»** کلیک کنید.
+
+### 4. ساخت کانفیگ جدید
+به بخش **کانفیگ‌ها** بروید و روی **«ساخت کانفیگ جدید»** کلیک کنید. کانفیگ به صورت خودکار در Xray اضافه می‌شود.
+
+### 5. دریافت QR Code / Share Link
+در جدول کانفیگ‌ها، روی آیکون QR یا لینک اشتراک کلیک کنید.
+
+## ⚙️ تنظیمات محیط (Environment Variables)
+
+| متغیر | پیش‌فرض | توضیح |
+|------|---------|--------|
+| `DATABASE_URL` | `file:./db/custom.db` | مسیر دیتابیس SQLite |
+| `XRAY_PUBLIC_HOST` | `fastapicloud.com` | دامنه‌ای که کلاینت‌ها به آن متصل می‌شوند |
+| `XRAY_PUBLIC_PORT` | `8443` | پورت عمومی Xray (در production: 443) |
+| `XRAY_TLS_ENABLED` | `true` | فعال/غیرفعال کردن TLS |
+| `XRAY_CERT_PATH` | `xray-data/cert.pem` | مسیر فایل گواهی TLS |
+| `XRAY_KEY_PATH` | `xray-data/key.pem` | مسیر فایل کلید TLS |
+
+## 🏗 ساختار پروژه
+
 ```
-https://<your-bunnyshell-domain>/
+fastapicloud-ws-panel/
+├── bin/
+│   └── xray                    # Xray binary (دانلود شده توسط setup.sh)
+├── xray-data/
+│   ├── config.json             # تولید دینامیک توسط پنل
+│   ├── cert.pem                # گواهی TLS
+│   ├── key.pem                 # کلید TLS
+│   ├── geoip.dat               # داده‌های GeoIP
+│   ├── geosite.dat             # داده‌های GeoSite
+│   └── xray.log                # لاگ Xray
+├── prisma/
+│   └── schema.prisma           # مدل‌های دیتابیس
+├── src/
+│   ├── app/
+│   │   ├── api/                # API routes
+│   │   │   ├── auth/           # login, logout, check, password
+│   │   │   ├── configs/        # CRUD کانفیگ‌ها
+│   │   │   ├── servers/        # CRUD سرورها
+│   │   │   ├── users/          # CRUD کاربران
+│   │   │   ├── xray/           # start, stop, restart, status, config, logs
+│   │   │   ├── qr/             # تولید QR Code
+│   │   │   └── seed/           # داده‌های نمونه
+│   │   ├── layout.tsx          # RTL فارسی + Vazirmatn
+│   │   ├── page.tsx            # Single Page App
+│   │   └── globals.css         # استایل Glassmorphism
+│   ├── components/
+│   │   ├── admin/
+│   │   │   ├── login-screen.tsx
+│   │   │   ├── sidebar.tsx
+│   │   │   ├── dashboard.tsx
+│   │   │   ├── configs-table.tsx
+│   │   │   ├── servers-manager.tsx
+│   │   │   ├── users-manager.tsx
+│   │   │   ├── stats-view.tsx
+│   │   │   ├── settings-view.tsx
+│   │   │   └── xray-local-manager.tsx
+│   │   └── ui/                 # shadcn/ui components
+│   └── lib/
+│       ├── auth.ts             # session management
+│       ├── db.ts               # Prisma client
+│       ├── v2ray.ts            # share link generators
+│       ├── serialize.ts        # BigInt serialization
+│       ├── xray-config.ts      # config.json generator
+│       └── xray-process.ts     # subprocess manager
+├── setup.sh                    # اسکریپت نصب
+├── .env                        # تنظیمات محیط
+└── package.json
 ```
 
-با نام کاربری و رمز عبور وارد شوید.
+## 🌐 Deploy در Production
 
-### افزودن کاربر
-
-1. در داشبورد، فرم «افزودن کاربر جدید» را پر کنید
-2. روی «افزودن» کلیک کنید
-3. UUID به‌صورت خودکار تولید می‌شود
-4. Xray به‌صورت خودکار بارگذاری مجدد می‌شود
-
-### گرفتن لینک VLESS
-
-1. در لیست کاربران، روی «لینک» کلیک کنید
-2. لینک VLESS نمایش داده می‌شود
-3. روی «کپی لینک» کلیک کنید
-4. در کلاینت (v2rayNG, v2rayN, Streisand) وارد کنید
-
-### مشاهده‌ی لاگ‌ها
-
-1. در منوی بالا، روی «لاگ‌ها» کلیک کنید
-2. بین Access Log و Error Log انتخاب کنید
-3. برای مشاهده‌ی زنده، تیک «زنده (Live)» را بزنید
-
-## 🧪 تست محلی
+### روش 1: VPS مستقیم
 
 ```bash
-cd xray-custom-panel
-docker compose up --build
+# روی VPS:
+git clone https://github.com/YOUR_USERNAME/fastapicloud-ws-panel.git
+cd fastapicloud-ws-panel
+./setup.sh
+
+# تنظیمات production:
+echo "XRAY_PUBLIC_PORT=443" >> .env
+echo "XRAY_PUBLIC_HOST=your-domain.com" >> .env
+
+# جایگزینی cert واقعی:
+cp /etc/letsencrypt/live/your-domain.com/fullchain.pem xray-data/cert.pem
+cp /etc/letsencrypt/live/your-domain.com/privkey.pem xray-data/key.pem
+
+# اجرای production:
+bun run build
+bun run start
 ```
 
-سپس به `http://localhost/` بروید.
+### روش 2: با Reverse Proxy (Caddy)
 
-## 🔧 عیب‌یابی
+اگر Caddy روی پورت 443 دارید، Xray را روی پورت داخلی نگه دارید:
 
-### پنل باز نمی‌شود
+```env
+XRAY_PUBLIC_PORT=8443
+XRAY_PUBLIC_HOST=your-domain.com
+```
 
-- لاگ‌های Bunnyshell را بررسی کنید
-- در داشبورد Bunnyshell، وضعیت Pod را ببینید
-- با curl تست کنید: `curl -v https://your-domain/`
+سپس در Caddyfile:
+```
+your-domain.com {
+    reverse_proxy /vless/* localhost:8443
+    reverse_proxy /trojan/* localhost:8443
+    reverse_proxy /* localhost:3000  # پنل
+}
+```
 
-### پینگ نمی‌دهد
+## 📡 API Reference
 
-- به بخش «لاگ‌ها» در پنل بروید
-- Error Log را به‌صورت زنده باز کنید
-- سعی کنید با کلاینت وصل شوید
-- خطا را در لاگ ببینید
+### Authentication
+- `POST /api/auth/login` — ورود
+- `POST /api/auth/logout` — خروج
+- `GET /api/auth/check` — بررسی session
+- `POST /api/auth/password` — تغییر رمز
 
-### تغییر دامنه
+### Configs
+- `GET /api/configs` — لیست کانفیگ‌ها
+- `POST /api/configs` — ساخت کانفیگ جدید
+- `GET /api/configs/[id]` — جزئیات + share link
+- `PUT /api/configs/[id]` — ویرایش
+- `DELETE /api/configs/[id]` — حذف
 
-اگر دامنه‌ی Bunnyshell شما تغییر کرد:
-1. در پنل Bunnyshell، متغیر `PUBLIC_DOMAIN` را به‌روزرسانی کنید
-2. Redeploy بزنید
-3. در داشبورد پنل، لینک‌های جدید با دامنه‌ی جدید تولید می‌شوند
+### Servers
+- `GET /api/servers` — لیست سرورها
+- `POST /api/servers` — افزودن سرور
+- `PUT /api/servers/[id]` — ویرایش
+- `DELETE /api/servers/[id]` — حذف
 
-## 🛡️ امنیت
+### Users
+- `GET /api/users` — لیست کاربران
+- `POST /api/users` — افزودن کاربر
+- `PUT /api/users/[id]` — ویرایش
+- `DELETE /api/users/[id]` — حذف
 
-- حتماً `ADMIN_PASS` و `PANEL_SECRET` را به‌عنوان SECRET تنظیم کنید
-- مسیر `/vless` را می‌توانید با متغیر `XRAY_WS_PATH` تغییر دهید
-- پس از اولین ورود، رمز عبور را از پنل تغییر دهید (در نسخه‌های آینده)
+### Xray Local
+- `POST /api/xray/start` — اجرای Xray
+- `POST /api/xray/stop` — توقف Xray
+- `POST /api/xray/restart` — restart + regenerate config
+- `GET /api/xray/status` — وضعیت فعلی
+- `GET /api/xray/config` — preview config.json
+- `GET /api/xray/logs` — مشاهده لاگ‌ها
 
-## 📝 مجوز
+### Stats
+- `GET /api/stats` — آمار داشبورد
+- `GET /api/qr?id=[configId]` — QR Code image
 
-این پروژه برای استفاده‌ی شخصی و آموزشی آزاد است.
+## 🔒 امنیت
 
-</div>
+- رمز عبور با bcrypt هش می‌شود
+- Session در HttpOnly cookie ذخیره می‌شود
+- تمام API routes نیاز به احراز هویت دارند
+- Xray فقط به private network دسترسی دارد (geoip:private مسدود است)
+
+## 📝 License
+
+MIT License — رایگان برای استفاده شخصی و تجاری
+
+## 🤝 پشتیبانی
+
+برای سوالات و مشکلات، issue در GitHub باز کنید.
