@@ -13,8 +13,28 @@ const DATA_DIR = process.env.DATA_DIR || '/data';
 const STATIC_DIR =
   process.env.STATIC_DIR || path.join(__dirname, '..', 'client', 'dist');
 
+// Surface fatal errors clearly so they show up in Railway deploy logs
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] uncaughtException:', err.stack || err.message);
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[FATAL] unhandledRejection:', reason && reason.stack ? reason.stack : reason);
+});
+
+console.log('[boot] starting panel…');
+console.log('[boot] PORT env =', JSON.stringify(process.env.PORT), '→ will listen on', PORT);
+console.log('[boot] DATA_DIR =', DATA_DIR);
+console.log('[boot] STATIC_DIR =', STATIC_DIR, '→ exists:', fs.existsSync(STATIC_DIR));
+console.log('[boot] XRAY_BIN =', process.env.XRAY_BIN || '/usr/local/bin/xray', '→ exists:', fs.existsSync(process.env.XRAY_BIN || '/usr/local/bin/xray'));
+
 fs.mkdirSync(DATA_DIR, { recursive: true });
-ensureAdmin();
+try {
+  ensureAdmin();
+} catch (e) {
+  console.error('[FATAL] ensureAdmin failed:', e.message);
+  process.exit(1);
+}
 
 const app = express();
 
@@ -69,7 +89,13 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'خطای داخلی سرور.' });
 });
 
-// ---------- Boot ----------
+// ---------- Listen FIRST so Railway's health check passes fast ----------
+app.listen(PORT, '0.0.0.0', () => {
+  console.log('[panel] ✓ listening on 0.0.0.0:' + PORT);
+  console.log('[panel] data dir: ' + DATA_DIR);
+});
+
+// ---------- Boot background tasks AFTER listen ----------
 (async () => {
   try {
     const v = await getXrayVersion();
@@ -78,16 +104,19 @@ app.use((err, req, res, next) => {
     console.warn('[xray] version probe failed:', e.message);
   }
 
-  startXray();
+  try {
+    startXray();
+  } catch (e) {
+    console.error('[xray] start failed:', e.message);
+  }
 
-  const interval = parseInt(getSettings().stats_interval_ms, 10) || 5000;
-  startPolling(interval);
+  try {
+    const interval = parseInt(getSettings().stats_interval_ms, 10) || 5000;
+    startPolling(interval);
+  } catch (e) {
+    console.error('[stats] start failed:', e.message);
+  }
 })();
-
-app.listen(PORT, '0.0.0.0', () => {
-  console.log('[panel] listening on 0.0.0.0:' + PORT);
-  console.log('[panel] data dir: ' + DATA_DIR);
-});
 
 // Graceful shutdown
 function shutdown() {

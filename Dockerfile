@@ -55,11 +55,14 @@ COPY server/                ./server/
 COPY --from=client-builder  /app/client/dist ./client/dist
 
 # --- Environment ---
+# IMPORTANT: do NOT set PORT here — Railway injects $PORT at runtime and the
+# panel listens on whatever value Railway provides. Setting PORT in the image
+# can cause a mismatch between what the panel listens on and what Railway's
+# public domain routes to (→ 502 errors).
 ENV DATA_DIR=/data \
     XRAY_BIN=/usr/local/bin/xray \
     STATIC_DIR=/app/client/dist \
     NODE_ENV=production \
-    PORT=3000 \
     XRAY_PORT=8443 \
     XRAY_API_PORT=10085
 
@@ -68,10 +71,6 @@ RUN mkdir -p /data
 # Data persists only for the lifetime of the current deploy container.
 # To make /data survive redeploys, attach a Railway Volume at /data in the
 # service Settings tab (Railway manages the volume outside the Dockerfile).
-
-# Railway injects $PORT; the panel serves HTTP on it.
-# Xray listens on $XRAY_PORT (must be exposed via Railway TCP Proxy separately).
-EXPOSE 3000
 
 ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "server/index.js"]
