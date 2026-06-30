@@ -63,7 +63,10 @@ ENV DATA_DIR=/data \
     XRAY_API_PORT=10085
 
 RUN mkdir -p /data
-VOLUME ["/data"]
+# NOTE: do NOT declare a Docker VOLUME here — Railway rejects it.
+# Data persists only for the lifetime of the current deploy container.
+# To make /data survive redeploys, attach a Railway Volume at /data in the
+# service Settings tab (Railway manages the volume outside the Dockerfile).
 
 # Railway injects $PORT; the panel serves HTTP on it.
 # Xray listens on $XRAY_PORT (must be exposed via Railway TCP Proxy separately).

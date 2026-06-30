@@ -96,14 +96,18 @@ All optional — the app generates safe random values on first boot and logs the
 2. In Railway, click **New Project → Deploy from GitHub repo** and select the repo.
 3. Railway detects the Dockerfile and builds it. The first build downloads the Xray binary (~25 MB) and runs `npm install` for both backend and frontend.
 
-### 2. Attach a Volume at `/data`
+### 2. Attach a Volume at `/data` (recommended — otherwise data is lost on redeploy)
 
-Everything that must survive a redeploy lives in `/data`:
+> ⚠️ The Dockerfile deliberately does **not** declare `VOLUME ["/data"]` because Railway rejects Dockerfile-level VOLUME instructions. You must attach a Railway-managed Volume yourself.
+
+Everything that must survive a redeploy lives in `/data` (SQLite db, REALITY keypair, xray-config.json, logs, admin credentials):
 
 1. In your Railway service, go to the **Settings** tab.
 2. Click **+ Add Volume**.
 3. Mount path: `/data`.
 4. Click **Add**. Railway creates the volume and remounts the service.
+
+If you skip this step, the panel still runs — but every redeploy will reset clients, traffic counters, REALITY keys, and the admin password. You have been warned.
 
 ### 3. Set environment variables
 
