@@ -33,7 +33,8 @@ RUN apk add --no-cache ca-certificates wget unzip tini
 # --- Download the official Xray-core binary ---
 # Update XRAY_VERSION to the latest release from
 # https://github.com/XTLS/Xray-core/releases
-ARG XRAY_VERSION=v25.6.30
+# (verified: v25.6.8 exists; some intermediate tags are yanked by upstream)
+ARG XRAY_VERSION=v25.6.8
 RUN set -eux; \
     wget -q -O /tmp/xray.zip \
       "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/Xray-linux-64.zip"; \
