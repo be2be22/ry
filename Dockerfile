@@ -1,76 +1,84 @@
-# syntax=docker/dockerfile:1.6
+# ============================================================
+# CyberX VPN Panel — Dockerfile
+# Multi-stage build: download Xray-core + build Next.js app
+# Deployable to Railway with a single click
+# ============================================================
 
-# =============================================================================
-# Stage 1 — Build the React frontend with Vite
-# =============================================================================
-FROM node:20-alpine AS client-builder
-WORKDIR /app/client
+# ---------- Stage 1: Download Xray-core ----------
+FROM alpine:3.20 AS xray-downloader
+ARG XRAY_VERSION=v25.1.30
+RUN apk add --no-cache curl unzip
+WORKDIR /tmp
+RUN curl -fsSL "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/Xray-linux-64.zip" -o xray.zip \
+    && unzip xray.zip -d /tmp/xray \
+    && chmod +x /tmp/xray/xray \
+    && rm -f xray.zip
 
-# Install client deps (cached unless package.json changes)
-COPY client/package.json client/package-lock.json* ./
-RUN npm install --no-audit --no-fund
-
-# Build the client
-COPY client/ ./
-RUN npm run build
-
-# =============================================================================
-# Stage 2 — Install backend production dependencies
-# =============================================================================
-FROM node:20-alpine AS server-builder
-RUN apk add --no-cache python3 make g++ libc6-compat
+# ---------- Stage 2: Build Next.js app ----------
+FROM node:22-slim AS builder
 WORKDIR /app
 
-COPY package.json package-lock.json* ./
-RUN npm install --omit=dev --no-audit --no-fund
+# Install bun
+RUN npm install -g bun
 
-# =============================================================================
-# Stage 3 — Final runtime image
-# =============================================================================
-FROM node:20-alpine AS runtime
-RUN apk add --no-cache ca-certificates wget unzip tini
+# Copy package files
+COPY package.json bun.lock* ./
+RUN bun install --frozen-lockfile
 
-# --- Download the official Xray-core binary ---
-# Update XRAY_VERSION to the latest release from
-# https://github.com/XTLS/Xray-core/releases
-# (verified: v25.6.8 exists; some intermediate tags are yanked by upstream)
-ARG XRAY_VERSION=v25.6.8
-RUN set -eux; \
-    wget -q -O /tmp/xray.zip \
-      "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/Xray-linux-64.zip"; \
-    mkdir -p /tmp/xray; \
-    unzip -o /tmp/xray.zip -d /tmp/xray >/dev/null; \
-    mv /tmp/xray/xray /usr/local/bin/xray; \
-    chmod +x /usr/local/bin/xray; \
-    rm -rf /tmp/xray*; \
-    /usr/local/bin/xray version
+# Copy source
+COPY . .
 
+# Generate Prisma client
+RUN bun run db:generate
+
+# Build Next.js (standalone output)
+RUN bun run build
+
+# ---------- Stage 3: Production image ----------
+FROM node:22-slim AS runner
 WORKDIR /app
 
-# --- Node app code + production deps + built frontend ---
-COPY --from=server-builder  /app/node_modules ./node_modules
-COPY --from=server-builder  /app/package.json ./package.json
-COPY server/                ./server/
+# Install runtime dependencies for systeminformation + sqlite
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    wget \
+    unzip \
+    procps \
+    util-linux \
+    && rm -rf /var/lib/apt/lists/*
 
-COPY --from=client-builder  /app/client/dist ./client/dist
+# Copy Xray binary from downloader stage
+COPY --from=xray-downloader /tmp/xray/xray /app/xray-core/xray
+RUN chmod +x /app/xray-core/xray
 
-# --- Environment ---
-# IMPORTANT: do NOT set PORT here — Railway injects $PORT at runtime and the
-# panel listens on whatever value Railway provides. Setting PORT in the image
-# can cause a mismatch between what the panel listens on and what Railway's
-# public domain routes to (→ 502 errors).
-ENV DATA_DIR=/data \
-    XRAY_BIN=/usr/local/bin/xray \
-    STATIC_DIR=/app/client/dist \
-    NODE_ENV=production \
-    XRAY_PORT=8443 \
-    XRAY_API_PORT=10085
+# Copy Next.js standalone build
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/public ./public
 
-RUN mkdir -p /data
-# NOTE: do NOT declare a Docker VOLUME here — Railway rejects it.
-# Data persists only for the lifetime of the current deploy container.
-# To make /data survive redeploys, attach a Railway Volume at /data in the
-# service Settings tab (Railway manages the volume outside the Dockerfile).
+# Copy Prisma files (for db:push at runtime)
+COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
+COPY --from=builder /app/node_modules/prisma ./node_modules/prisma
 
-ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["node", "server/index.js"]
+# Create db directory
+RUN mkdir -p /app/db /app/backups /app/xray-core
+
+# Environment defaults
+ENV NODE_ENV=production
+ENV PORT=3000
+ENV XRAY_PORT=8443
+ENV XRAY_DOMAIN=localhost
+ENV DATABASE_URL="file:/app/db/cyberx.db"
+ENV NEXTAUTH_SECRET="change-me-in-production-please"
+ENV NEXTAUTH_URL="http://localhost:3000"
+
+EXPOSE 3000
+EXPOSE 8443
+
+# Startup script: run db push, seed, start Xray, then start Next.js
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
+
+CMD ["/app/docker-entrypoint.sh"]
