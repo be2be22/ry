@@ -18,8 +18,12 @@ RUN curl -fsSL "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSI
 FROM node:22-slim AS builder
 WORKDIR /app
 
-# Install bun
-RUN npm install -g bun
+# Install OpenSSL + curl (needed by Prisma) and bun
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openssl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g bun
 
 # Copy package files
 COPY package.json bun.lock* ./

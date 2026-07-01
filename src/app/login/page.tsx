@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, Suspense } from "react";
 import { signIn } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { PixelHeading } from "@/components/cyber/pixel-heading";
@@ -10,6 +10,14 @@ import { Terminal, Lock, User, Shield, Loader2, AlertTriangle, Zap } from "lucid
 import { toast } from "sonner";
 
 export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-arcade" />}>
+      <LoginInner />
+    </Suspense>
+  );
+}
+
+function LoginInner() {
   const router = useRouter();
   const search = useSearchParams();
   const [username, setUsername] = useState("");
