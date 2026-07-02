@@ -1,9 +1,8 @@
 // Xray process manager — spawns Xray-core as a child process inside the container
 // مدیر پردازش Xray — Xray-core را به عنوان فرآیند فرزند اجرا می‌کند
 //
-// On Railway: the Xray binary is downloaded at Docker build time and placed at
-// /home/z/my-project/xray-core/xray. The config is generated from the inbounds
-// in the database and written to /home/z/my-project/xray-core/config.json.
+// On Railway: the Xray binary is at /app/xray-core/xray (baked into the image at build time).
+// The config is generated from the inbounds in the DB and written to /app/xray-core/config.json.
 //
 // In this sandbox: the binary is not present, so we run in SIMULATED mode and
 // return plausible stats. The real deployment will spawn the actual binary.
@@ -24,15 +23,23 @@ export interface XrayState {
   lastError: string | null;
   configPath: string;
   binaryPath: string;
+  lastLogTail: string | null;
 }
 
-const BINARY_PATH = path.join(process.cwd(), "xray-core", "xray");
-const CONFIG_PATH = path.join(process.cwd(), "xray-core", "config.json");
-const LOG_PATH = path.join(process.cwd(), "xray-core", "xray.log");
+// Use absolute paths — important because Next.js standalone server may have a
+// different cwd than the project root.
+const XRAY_DIR =
+  process.env.XRAY_DIR ||
+  (process.cwd().startsWith("/app") ? "/app/xray-core" : path.join(process.cwd(), "xray-core"));
+
+const BINARY_PATH = path.join(XRAY_DIR, "xray");
+const CONFIG_PATH = path.join(XRAY_DIR, "config.json");
+const LOG_PATH = path.join(XRAY_DIR, "xray.log");
 
 let childProc: ChildProcess | null = null;
 let startedAt: Date | null = null;
 let lastError: string | null = null;
+let lastLogTail: string | null = null;
 let mode: XrayMode = "simulated";
 
 // Detect once at startup whether the binary exists
@@ -53,6 +60,16 @@ async function binaryExists(): Promise<boolean> {
 export async function getXrayState(): Promise<XrayState> {
   await binaryExists();
   const uptime = startedAt ? Math.floor((Date.now() - startedAt.getTime()) / 1000) : 0;
+
+  // Try to read last log lines for debugging
+  try {
+    const log = await fs.readFile(LOG_PATH, "utf-8");
+    const lines = log.trim().split("\n").filter(Boolean);
+    lastLogTail = lines.slice(-15).join("\n");
+  } catch {
+    /* log file may not exist yet */
+  }
+
   return {
     mode,
     running: childProc !== null && !childProc.killed,
@@ -62,13 +79,14 @@ export async function getXrayState(): Promise<XrayState> {
     lastError,
     configPath: CONFIG_PATH,
     binaryPath: BINARY_PATH,
+    lastLogTail,
   };
 }
 
 export async function startXray(): Promise<{ ok: boolean; message: string }> {
   await binaryExists();
   if (childProc && !childProc.killed) {
-    return { ok: true, message: "Xray is already running" };
+    return { ok: true, message: "Xray از قبل در حال اجرا است" };
   }
 
   try {
@@ -77,30 +95,71 @@ export async function startXray(): Promise<{ ok: boolean; message: string }> {
     await fs.mkdir(path.dirname(CONFIG_PATH), { recursive: true });
     await fs.writeFile(CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
 
+    // Clear old log
+    try {
+      await fs.unlink(LOG_PATH);
+    } catch {
+      /* ignore */
+    }
+
     if (mode === "live") {
       // Spawn actual Xray binary
       childProc = spawn(BINARY_PATH, ["run", "-c", CONFIG_PATH], {
-        cwd: path.dirname(BINARY_PATH),
+        cwd: XRAY_DIR,
         env: { ...process.env },
         stdio: ["ignore", "pipe", "pipe"],
       });
 
-      const logStream = await fs.open(LOG_PATH, "a");
-      childProc.stdout?.on("data", (d) => logStream.write(d));
-      childProc.stderr?.on("data", (d) => logStream.write(d));
+      // Wait briefly to see if it starts OK (catch immediate crashes)
+      const startResult = await new Promise<{ ok: boolean; msg: string }>((resolve) => {
+        let resolved = false;
 
-      childProc.on("error", (err) => {
-        lastError = err.message;
-        childProc = null;
-      });
-      childProc.on("exit", (code) => {
-        if (code !== 0) lastError = `Xray exited with code ${code}`;
-        childProc = null;
+        const logChunks: string[] = [];
+        childProc!.stdout?.on("data", (d) => logChunks.push(d.toString()));
+        childProc!.stderr?.on("data", (d) => logChunks.push(d.toString()));
+
+        childProc!.on("error", (err) => {
+          if (!resolved) {
+            resolved = true;
+            resolve({ ok: false, msg: `خطای اجرای باینری: ${err.message}` });
+          }
+          lastError = err.message;
+          childProc = null;
+        });
+
+        childProc!.on("exit", (code, signal) => {
+          if (!resolved) {
+            resolved = true;
+            const tail = logChunks.join("").slice(-500);
+            if (code === 0 || code === null) {
+              resolve({ ok: false, msg: `Xray بلافاصله بسته شد (code=${code} signal=${signal}). لاگ:\n${tail}` });
+            } else {
+              resolve({
+                ok: false,
+                msg: `Xray با کد ${code} بسته شد. لاگ:\n${tail}`,
+              });
+            }
+          }
+          if (code !== 0 && code !== null) lastError = `Xray exited with code ${code}`;
+          childProc = null;
+        });
+
+        // If still alive after 1.5s, consider it started successfully
+        setTimeout(() => {
+          if (!resolved && childProc && !childProc.killed) {
+            resolved = true;
+            resolve({ ok: true, msg: `Xray با موفقیت شروع شد (PID ${childProc!.pid})` });
+          }
+        }, 1500);
       });
 
-      startedAt = new Date();
-      lastError = null;
-      return { ok: true, message: `Xray started (PID ${childProc.pid})` };
+      if (startResult.ok) {
+        startedAt = new Date();
+        lastError = null;
+      } else {
+        lastError = startResult.msg;
+      }
+      return startResult;
     } else {
       // Simulated mode — pretend to run
       childProc = spawn("sleep", ["999999"], { stdio: "ignore" });
@@ -108,7 +167,8 @@ export async function startXray(): Promise<{ ok: boolean; message: string }> {
       lastError = null;
       return {
         ok: true,
-        message: "Xray started in SIMULATED mode (binary not available in sandbox)",
+        message:
+          "Xray در حالت شبیه‌سازی شروع شد (باینری در sandbox موجود نیست — در Railway واقعی کار می‌کند)",
       };
     }
   } catch (e) {
@@ -130,9 +190,9 @@ export async function stopXray(): Promise<{ ok: boolean; message: string }> {
     }
     childProc = null;
     startedAt = null;
-    return { ok: true, message: "Xray stopped" };
+    return { ok: true, message: "Xray متوقف شد" };
   }
-  return { ok: true, message: "Xray was not running" };
+  return { ok: true, message: "Xray از قبل متوقف بود" };
 }
 
 export async function restartXray(): Promise<{ ok: boolean; message: string }> {
@@ -142,23 +202,102 @@ export async function restartXray(): Promise<{ ok: boolean; message: string }> {
 }
 
 /**
+ * Get the public-facing host for client configs.
+ * Priority: XRAY_DOMAIN env > RAILWAY_STATIC_URL > RAILWAY_TCP_PROXY_DOMAIN (for reality) > DB setting > localhost
+ */
+export async function getEffectiveHost(): Promise<string> {
+  if (process.env.XRAY_DOMAIN) return process.env.XRAY_DOMAIN;
+  if (process.env.RAILWAY_STATIC_URL) return process.env.RAILWAY_STATIC_URL;
+  const setting = await db.setting.findUnique({ where: { key: "domain" } });
+  if (setting?.value) return setting.value;
+  return "localhost";
+}
+
+/**
+ * Get the Railway TCP proxy host (for Reality/raw-TCP protocols).
+ * Railway exposes raw TCP via the `RAILWAY_TCP_PROXY_DOMAIN` env var when you
+ * add a "TCP Proxy" port to your service.
+ */
+export function getRailwayTcpProxyDomain(): string | null {
+  return (
+    process.env.RAILWAY_TCP_PROXY_DOMAIN ||
+    process.env.RAILWAY_TCP_HOST ||
+    null
+  );
+}
+
+export function getRailwayTcpProxyPort(): number | null {
+  const p = process.env.RAILWAY_TCP_PROXY_PORT;
+  if (p) return Number(p);
+  return null;
+}
+
+/**
  * Generate the Xray JSON config from the inbounds in the DB.
- * All inbounds listen on 0.0.0.0 with the configured port, but since Railway
- * only exposes HTTPS/WSS, the actual TLS termination happens at Railway's
- * reverse proxy. For protocols that need TLS, we configure Xray to listen
- * with security "none" on the path/stream, and rely on Railway's TLS.
+ * All inbounds listen on 0.0.0.0 with the configured port.
  *
- * For WebSocket / gRPC / xHTTP transports, Xray can run plaintext behind
- * Railway's TLS-terminating reverse proxy — clients connect via WSS/HTTPS
- * to Railway's domain, which forwards to Xray's plaintext listener.
+ * For protocols that use Railway's HTTPS/WSS reverse proxy (WS, gRPC, xHTTP):
+ *   - Xray listens with security: "none" (plaintext)
+ *   - Railway terminates TLS at the edge
+ *   - Clients connect via WSS/HTTPS to Railway's domain on port 443
+ *
+ * For Reality / raw-TCP protocols:
+ *   - Xray listens with security: "reality" (or "tls" for XTLS-Vision)
+ *   - Railway's TCP Proxy forwards raw TCP to the container
+ *   - Clients connect via the TCP proxy domain:port
  */
 export async function generateXrayConfig(): Promise<Record<string, unknown>> {
-  const inbounds = await db.inbound.findMany({ where: { enabled: true } });
+  const allInbounds = await db.inbound.findMany({ where: { enabled: true } });
 
-  // If no inbounds defined yet, use sensible defaults
-  const inboundsConfig = inbounds.length
-    ? inbounds.map(buildInboundConfig)
-    : defaultInbounds();
+  // Load Reality keys from DB (set by admin via UI) — fallback to env vars
+  const [privKeySetting, shortIdSetting, pubKeySetting] = await Promise.all([
+    db.setting.findUnique({ where: { key: "xray_reality_private_key" } }),
+    db.setting.findUnique({ where: { key: "xray_reality_short_id" } }),
+    db.setting.findUnique({ where: { key: "xray_reality_public_key" } }),
+  ]);
+  const realityKeys = {
+    privateKey:
+      process.env.XRAY_REALITY_PRIVATE_KEY || privKeySetting?.value || "",
+    shortId: process.env.XRAY_REALITY_SHORT_ID || shortIdSetting?.value || "",
+    publicKey: process.env.XRAY_REALITY_PUBLIC_KEY || pubKeySetting?.value || "",
+  };
+
+  // Validate Reality keys — only include Reality inbounds if keys are present and valid.
+  // A valid x25519 key is 43-char base64url (ends with "=").
+  const realityValid =
+    realityKeys.privateKey &&
+    realityKeys.privateKey.length >= 40 &&
+    realityKeys.shortId &&
+    /^[0-9a-f]{1,16}$/i.test(realityKeys.shortId);
+
+  // Filter out inbounds that don't work behind Railway's HTTPS reverse proxy:
+  // - Reality/XTLS-Vision: need raw TCP (Railway TCP Proxy)
+  // - gRPC: nginx can't proxy gRPC to Xray reliably (frame size issues)
+  // - xHTTP: nginx can't proxy xHTTP (custom protocol, not standard HTTP)
+  // Only WebSocket-based inbounds work behind nginx → Railway HTTPS
+  const inbounds = allInbounds.filter((ib) => {
+    // Only allow WebSocket transport (works perfectly behind nginx)
+    if (ib.network === "ws") return true;
+    // Reality needs valid keys AND Railway TCP Proxy
+    if (ib.security === "reality") return Boolean(realityValid);
+    // Skip gRPC, xHTTP, and TCP+TLS (don't work behind nginx)
+    return false;
+  });
+
+  // If no inbounds defined yet, use sensible defaults (filtered)
+  let inboundsConfig;
+  if (inbounds.length === 0 && allInbounds.length === 0) {
+    inboundsConfig = defaultInbounds().filter((ib) => {
+      const nw = (ib.streamSettings as { network: string })?.network;
+      const ss = (ib.streamSettings as { security: string })?.security;
+      // Only WebSocket and (valid) Reality
+      if (nw === "ws") return true;
+      if (ss === "reality") return Boolean(realityValid);
+      return false;
+    });
+  } else {
+    inboundsConfig = inbounds.map((ib) => buildInboundConfig(ib, realityKeys));
+  }
 
   return {
     log: {
@@ -198,16 +337,19 @@ export async function generateXrayConfig(): Promise<Record<string, unknown>> {
   };
 }
 
-function buildInboundConfig(inbound: {
-  tag: string;
-  protocol: string;
-  port: number;
-  network: string;
-  security: string;
-  path: string | null;
-  serviceName: string | null;
-  sni: string | null;
-}): Record<string, unknown> {
+function buildInboundConfig(
+  inbound: {
+    tag: string;
+    protocol: string;
+    port: number;
+    network: string;
+    security: string;
+    path: string | null;
+    serviceName: string | null;
+    sni: string | null;
+  },
+  realityKeys: { privateKey: string; shortId: string } = { privateKey: "", shortId: "" }
+): Record<string, unknown> {
   const base: Record<string, unknown> = {
     tag: inbound.tag,
     listen: "0.0.0.0",
@@ -215,11 +357,46 @@ function buildInboundConfig(inbound: {
     protocol: inbound.protocol,
   };
 
-  // Stream settings — Railway terminates TLS, so Xray runs plaintext
+  // Stream settings
   const streamSettings: Record<string, unknown> = {
     network: inbound.network,
-    security: "none", // TLS handled by Railway reverse proxy
   };
+
+  // For WS/gRPC/xHTTP behind Railway's HTTPS reverse proxy: Xray runs plaintext
+  // (Railway terminates TLS at the edge).
+  if (
+    inbound.security === "none" ||
+    (inbound.security === "tls" &&
+      (inbound.network === "ws" ||
+        inbound.network === "grpc" ||
+        inbound.network === "xhttp"))
+  ) {
+    streamSettings.security = "none";
+  } else if (inbound.security === "reality") {
+    // Reality needs raw TCP — Railway's TCP Proxy forwards to Xray directly.
+    // Keys are loaded from DB (set by admin via UI) or env (fallback).
+    streamSettings.security = "reality";
+    streamSettings.realitySettings = {
+      show: false,
+      dest: "www.microsoft.com:443",
+      xver: 0,
+      serverNames: [inbound.sni || "www.microsoft.com"],
+      privateKey: process.env.XRAY_REALITY_PRIVATE_KEY || realityKeys.privateKey || "",
+      shortIds: [process.env.XRAY_REALITY_SHORT_ID || realityKeys.shortId || ""],
+    };
+  } else if (inbound.security === "tls") {
+    // Raw-TCP + TLS (XTLS-Vision) — also needs Railway TCP Proxy
+    streamSettings.security = "tls";
+    streamSettings.tlsSettings = {
+      serverName: inbound.sni || process.env.XRAY_DOMAIN || "localhost",
+      certificates: [
+        {
+          certificateFile: process.env.XRAY_TLS_CERT_FILE || "",
+          keyFile: process.env.XRAY_TLS_KEY_FILE || "",
+        },
+      ],
+    };
+  }
 
   if (inbound.network === "ws") {
     streamSettings.wsSettings = {
@@ -229,7 +406,7 @@ function buildInboundConfig(inbound: {
   } else if (inbound.network === "grpc") {
     streamSettings.grpcSettings = {
       serviceName: inbound.serviceName || inbound.tag,
-      multiMode: false,
+      multiMode: true,
     };
   } else if (inbound.network === "xhttp") {
     streamSettings.xhttpSettings = {
@@ -242,26 +419,13 @@ function buildInboundConfig(inbound: {
     };
   }
 
-  // For Reality (used when not behind Railway TLS) — kept as a separate inbound type
-  if (inbound.security === "reality") {
-    streamSettings.security = "reality";
-    streamSettings.realitySettings = {
-      show: false,
-      dest: "www.microsoft.com:443",
-      xver: 0,
-      serverNames: ["www.microsoft.com"],
-      privateKey: "", // generated at install time
-      shortIds: [""],
-    };
-  }
-
   base.streamSettings = streamSettings;
 
   // Protocol-specific settings
   if (inbound.protocol === "vless") {
     base.settings = {
       decryption: "none",
-      clients: [], // populated by user data at config-write time
+      clients: [],
     };
   } else if (inbound.protocol === "vmess") {
     base.settings = { clients: [] };
@@ -279,17 +443,11 @@ function buildInboundConfig(inbound: {
 
 /**
  * Default inbound set — 8 protocols designed to work behind Railway's
- * HTTPS/WSS reverse proxy. All listeners run plaintext (security: none)
- * because Railway terminates TLS at the edge.
- *
- * Ports chosen are arbitrary; in Railway you'll map each port via the
- * `railway.json` configuration OR use a single port with path-based
- * routing for the WS / xHTTP variants. For simplicity and to avoid
- * burning multiple ports, we use ONE port per protocol-family with
- * different paths/services.
+ * HTTPS/WSS reverse proxy (or TCP Proxy for Reality).
  */
 function defaultInbounds() {
   const PORT = Number(process.env.XRAY_PORT || 8443);
+  const REALITY_PORT = Number(process.env.RAILWAY_TCP_APPLICATION_PORT || PORT + 1);
   return [
     {
       tag: "vless-ws",
@@ -313,7 +471,7 @@ function defaultInbounds() {
       streamSettings: {
         network: "grpc",
         security: "none",
-        grpcSettings: { serviceName: "vless-grpc", multiMode: false },
+        grpcSettings: { serviceName: "vless-grpc", multiMode: true },
       },
       sniffing: { enabled: true, destOverride: ["http", "tls", "quic"] },
     },
@@ -352,14 +510,14 @@ function defaultInbounds() {
       streamSettings: {
         network: "grpc",
         security: "none",
-        grpcSettings: { serviceName: "trojan-grpc", multiMode: false },
+        grpcSettings: { serviceName: "trojan-grpc", multiMode: true },
       },
       sniffing: { enabled: true, destOverride: ["http", "tls", "quic"] },
     },
     {
       tag: "vless-reality",
       listen: "0.0.0.0",
-      port: PORT + 1,
+      port: REALITY_PORT,
       protocol: "vless",
       settings: { decryption: "none", clients: [] },
       streamSettings: {
@@ -370,8 +528,8 @@ function defaultInbounds() {
           dest: "www.microsoft.com:443",
           xver: 0,
           serverNames: ["www.microsoft.com"],
-          privateKey: "",
-          shortIds: [""],
+          privateKey: process.env.XRAY_REALITY_PRIVATE_KEY || "",
+          shortIds: [process.env.XRAY_REALITY_SHORT_ID || ""],
         },
       },
       sniffing: { enabled: true, destOverride: ["http", "tls", "quic"] },
@@ -392,7 +550,7 @@ function defaultInbounds() {
     {
       tag: "vless-tcp-xtls",
       listen: "0.0.0.0",
-      port: PORT + 2,
+      port: REALITY_PORT,
       protocol: "vless",
       settings: { decryption: "none", clients: [] },
       streamSettings: {
@@ -400,7 +558,7 @@ function defaultInbounds() {
         security: "tls",
         tlsSettings: {
           serverName: process.env.XRAY_DOMAIN || "localhost",
-          certificates: [], // auto from Railway
+          certificates: [],
         },
       },
       sniffing: { enabled: true, destOverride: ["http", "tls", "quic"] },
@@ -458,6 +616,7 @@ export async function regenerateXrayConfigWithUsers(): Promise<void> {
     });
 
     config.inbounds = inbounds;
+    await fs.mkdir(path.dirname(CONFIG_PATH), { recursive: true });
     await fs.writeFile(CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
   } catch (e) {
     lastError = e instanceof Error ? e.message : String(e);

@@ -11,4 +11,8 @@ server.log
 .zscripts
 examples
 download
+.env
+.env.local
+.env.production
 scripts/list-tokens.js
+scripts/cleanup.js

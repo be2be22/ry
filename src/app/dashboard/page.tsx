@@ -13,6 +13,8 @@ import {
   Power,
   RefreshCw,
   AlertCircle,
+  Play,
+  Square,
 } from "lucide-react";
 import {
   AreaChart,
@@ -70,7 +72,7 @@ interface Stats {
 export default function DashboardPage() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
-  const { state: xrayState, restart: xrayRestart } = useXray();
+  const { state: xrayState, restart: xrayRestart, start: xrayStart, stop: xrayStop } = useXray();
 
   useEffect(() => {
     let mounted = true;
@@ -189,32 +191,77 @@ export default function DashboardPage() {
           icon={<Clock className="w-5 h-5" />}
           accent="magenta"
         />
-        <GlowCard className="p-4 flex items-center justify-between" variant={xrayState?.running ? "cyan" : "magenta"}>
-          <div>
+        <GlowCard className="p-4 flex flex-col gap-2" variant={xrayState?.running ? "cyan" : "magenta"}>
+          <div className="flex items-center justify-between">
             <MicroLabel color={xrayState?.running ? "cyan" : "magenta"}>وضعیت Xray</MicroLabel>
-            <div
-              className={`text-2xl font-bold font-mono-cyber mt-1 ${
-                xrayState?.running ? "neon-text-cyan" : "neon-text-magenta"
-              }`}
-            >
-              {xrayState?.running ? "در حال اجرا" : "متوقف"}
-            </div>
-            <div className="text-xs text-muted-foreground mt-1">
-              {xrayState?.mode === "live" ? "حالت زنده" : "حالت شبیه‌سازی"}
-              {xrayState?.pid && ` • PID: ${xrayState.pid}`}
+            <div className="flex gap-1">
+              {xrayState?.running ? (
+                <>
+                  <button
+                    onClick={async () => {
+                      const t = toast.loading("در حال ری‌استارت Xray...");
+                      const r = await xrayRestart();
+                      if (r?.ok) toast.success("Xray ری‌استارت شد", { id: t });
+                      else toast.error(r?.message || "خطا در ری‌استارت", { id: t, duration: 10000 });
+                    }}
+                    className="p-2 rounded border border-[#ff2f6e]/40 text-[#ff2f6e] hover:bg-[#ff2f6e]/10 transition-all"
+                    title="ری‌استارت"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={async () => {
+                      const t = toast.loading("در حال توقف Xray...");
+                      await xrayStop();
+                      toast.success("Xray متوقف شد", { id: t });
+                    }}
+                    className="p-2 rounded border border-[#ff3b3b]/40 text-[#ff3b3b] hover:bg-[#ff3b3b]/10 transition-all"
+                    title="توقف"
+                  >
+                    <Square className="w-4 h-4" />
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={async () => {
+                    const t = toast.loading("در حال شروع Xray...");
+                    const r = await xrayStart();
+                    if (r?.ok) toast.success(r.message || "Xray شروع شد", { id: t });
+                    else
+                      toast.error(r?.message || "خطا در شروع Xray", {
+                        id: t,
+                        duration: 15000,
+                      });
+                  }}
+                  className="p-2 rounded border border-[#69f0ae]/40 text-[#69f0ae] hover:bg-[#69f0ae]/10 transition-all animate-cyan-breath"
+                  title="شروع"
+                >
+                  <Play className="w-4 h-4" />
+                </button>
+              )}
             </div>
           </div>
-          <button
-            onClick={async () => {
-              const t = toast.loading("در حال ری‌استارت Xray...");
-              await xrayRestart();
-              toast.success("Xray ری‌استارت شد", { id: t });
-            }}
-            className="p-3 rounded border border-[#ff2f6e]/40 text-[#ff2f6e] hover:bg-[#ff2f6e]/10 transition-all"
-            title="ری‌استارت Xray"
+          <div
+            className={`text-2xl font-bold font-mono-cyber ${
+              xrayState?.running ? "neon-text-cyan" : "neon-text-magenta"
+            }`}
           >
-            <RefreshCw className="w-5 h-5" />
-          </button>
+            {xrayState?.running ? "در حال اجرا" : "متوقف"}
+          </div>
+          <div className="text-xs text-muted-foreground">
+            {xrayState?.mode === "live" ? "حالت زنده" : "حالت شبیه‌سازی"}
+            {xrayState?.pid && ` • PID: ${xrayState.pid}`}
+            {xrayState?.binaryStat && !xrayState.binaryStat.exists && (
+              <span className="block neon-text-magenta mt-1">
+                ⚠ باینری Xray یافت نشد: {xrayState.binaryStat.path}
+              </span>
+            )}
+          </div>
+          {xrayState?.lastError && !xrayState.running && (
+            <div className="text-[10px] text-[#ff2f6e] bg-[#ff2f6e]/8 border border-[#ff2f6e]/30 p-2 rounded max-h-32 overflow-y-auto" dir="ltr">
+              {xrayState.lastError}
+            </div>
+          )}
         </GlowCard>
       </div>
 

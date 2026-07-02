@@ -8,6 +8,16 @@ interface XrayState {
   pid: number | null;
   uptimeSeconds: number;
   lastError: string | null;
+  lastLogTail: string | null;
+  // Diagnostic fields
+  binaryStat?: { exists: boolean; size?: number; path: string };
+  configStat?: { exists: boolean; size?: number; path: string };
+  railwayTcp?: {
+    domain: string | null;
+    port: string | null;
+    applicationPort: string | null;
+  };
+  env?: Record<string, string | null>;
 }
 
 interface XrayContextValue {
@@ -15,7 +25,7 @@ interface XrayContextValue {
   loading: boolean;
   refresh: () => Promise<void>;
   restart: () => Promise<void>;
-  start: () => Promise<void>;
+  start: () => Promise<{ ok: boolean; message: string }>;
   stop: () => Promise<void>;
 }
 
@@ -45,14 +55,18 @@ export function XrayProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const restart = useCallback(async () => {
-    await fetch("/api/xray/restart", { method: "POST" });
+  const start = useCallback(async () => {
+    const res = await fetch("/api/xray/start", { method: "POST" });
+    const data = await res.json();
     await refresh();
+    return data;
   }, [refresh]);
 
-  const start = useCallback(async () => {
-    await fetch("/api/xray/start", { method: "POST" });
+  const restart = useCallback(async () => {
+    const res = await fetch("/api/xray/restart", { method: "POST" });
+    const data = await res.json();
     await refresh();
+    return data;
   }, [refresh]);
 
   const stop = useCallback(async () => {

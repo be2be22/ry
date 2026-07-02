@@ -69,6 +69,12 @@ export default function SettingsPage() {
           <TabsTrigger value="2fa" className="data-[state=active]:bg-[#2de8d0]/10 data-[state=active]:text-[#2de8d0]">
             <Shield className="w-4 h-4 ml-1" /> ۲FA
           </TabsTrigger>
+          <TabsTrigger value="reality" className="data-[state=active]:bg-[#2de8d0]/10 data-[state=active]:text-[#2de8d0]">
+            <KeyRound className="w-4 h-4 ml-1" /> Reality
+          </TabsTrigger>
+          <TabsTrigger value="xray" className="data-[state=active]:bg-[#2de8d0]/10 data-[state=active]:text-[#2de8d0]">
+            <SettingsIcon className="w-4 h-4 ml-1" /> Xray
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="general">
@@ -82,6 +88,12 @@ export default function SettingsPage() {
         </TabsContent>
         <TabsContent value="2fa">
           <TwoFactorTab />
+        </TabsContent>
+        <TabsContent value="reality">
+          <RealityTab />
+        </TabsContent>
+        <TabsContent value="xray">
+          <XrayDiagnosticTab />
         </TabsContent>
       </Tabs>
     </div>
@@ -601,5 +613,311 @@ function TwoFactorTab() {
         </div>
       )}
     </GlowCard>
+  );
+}
+
+function RealityTab() {
+  const [s, setS] = useState<Settings | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [realityPubKey, setRealityPubKey] = useState("");
+  const [realityPrivKey, setRealityPrivKey] = useState("");
+  const [realityShortId, setRealityShortId] = useState("");
+
+  useEffect(() => {
+    fetch("/api/settings", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d) => {
+        setS(d);
+        setRealityPubKey(d.xray_reality_public_key || "");
+        setRealityPrivKey(d.xray_reality_private_key || "");
+        setRealityShortId(d.xray_reality_short_id || "");
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function generateKeys() {
+    setGenerating(true);
+    try {
+      const res = await fetch("/api/xray/reality-keys", { method: "POST" });
+      const data = await res.json();
+      if (res.ok) {
+        setRealityPrivKey(data.privateKey);
+        setRealityPubKey(data.publicKey);
+        setRealityShortId(data.shortId);
+        toast.success("کلیدهای Reality تولید شدند — حتماً ذخیره کنید");
+      } else {
+        toast.error(data.error || "خطا در تولید کلیدها");
+      }
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  async function save() {
+    setSaving(true);
+    try {
+      await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          xray_reality_public_key: realityPubKey,
+          xray_reality_private_key: realityPrivKey,
+          xray_reality_short_id: realityShortId,
+        }),
+      });
+      toast.success("کلیدهای Reality ذخیره شدند");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading || !s) return <div className="text-muted-foreground">در حال بارگذاری...</div>;
+
+  return (
+    <GlowCard className="p-6 space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <KeyRound className="w-5 h-5 neon-text-cyan" />
+          <PixelHeading as="h3" color="cyan">
+            تنظیمات Reality
+          </PixelHeading>
+        </div>
+        <CyberButton variant="cyan" onClick={generateKeys} loading={generating}>
+          تولید کلید جدید
+        </CyberButton>
+      </div>
+
+      <div className="cyber-card p-3 text-xs text-muted-foreground leading-relaxed">
+        <strong className="neon-text-cyan">راهنمای Reality روی Railway:</strong>
+        <br />
+        ۱. در پنل Railway، در بخش <strong>Settings → Networking</strong>، یک پورت
+        <strong> TCP</strong> اضافه کنید (نه HTTP).
+        <br />
+        ۲. Railway متغیرهای <code className="font-mono-cyber">RAILWAY_TCP_PROXY_DOMAIN</code> و{" "}
+        <code className="font-mono-cyber">RAILWAY_TCP_PROXY_PORT</code> را به‌صورت خودکار set می‌کند.
+        <br />
+        ۳. کلیدهای Reality را با دکمه «تولید کلید جدید» بسازید و ذخیره کنید.
+        <br />
+        ۴. Xray را از داشبورد شروع کنید — حالا کانفیگ‌های Reality و XTLS-Vision کار خواهند کرد.
+      </div>
+
+      <div>
+        <Label className="micro-label">Public Key (برای کلاینت)</Label>
+        <Input
+          value={realityPubKey}
+          onChange={(e) => setRealityPubKey(e.target.value)}
+          className="cyber-input mt-1 font-mono-cyber"
+          dir="ltr"
+          placeholder=" автоматически تولید می‌شود"
+        />
+      </div>
+      <div>
+        <Label className="micro-label">Private Key (فقط در سرور — محرمانه)</Label>
+        <Input
+          value={realityPrivKey}
+          onChange={(e) => setRealityPrivKey(e.target.value)}
+          className="cyber-input mt-1 font-mono-cyber"
+          dir="ltr"
+          placeholder=" автоматически تولید می‌شود"
+        />
+      </div>
+      <div>
+        <Label className="micro-label">Short ID (۸ کاراکتر hex)</Label>
+        <Input
+          value={realityShortId}
+          onChange={(e) => setRealityShortId(e.target.value)}
+          maxLength={16}
+          className="cyber-input mt-1 font-mono-cyber"
+          dir="ltr"
+          placeholder="مثلاً 0a1b2c3d"
+        />
+      </div>
+
+      <div className="pt-4 border-t border-[#2de8d0]/15">
+        <CyberButton variant="magenta" pulse loading={saving} onClick={save}>
+          ذخیره کلیدها
+        </CyberButton>
+      </div>
+    </GlowCard>
+  );
+}
+
+function XrayDiagnosticTab() {
+  const [diag, setDiag] = useState<Record<string, unknown> | null>(null);
+  const [state, setState] = useState<Record<string, unknown> | null>(null);
+  const [ports, setPorts] = useState<Record<string, unknown> | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [d, s, p] = await Promise.all([
+        fetch("/api/xray/test-binary").then((r) => r.json()),
+        fetch("/api/xray/state").then((r) => r.json()),
+        fetch("/api/xray/port-check").then((r) => r.json()),
+      ]);
+      setDiag(d);
+      setState(s);
+      setPorts(p);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  if (loading) return <div className="text-muted-foreground">در حال بارگذاری...</div>;
+
+  return (
+    <GlowCard className="p-6 space-y-4">
+      <div className="flex items-center justify-between">
+        <PixelHeading as="h3" color="cyan">
+          عیب‌یابی Xray
+        </PixelHeading>
+        <CyberButton variant="cyan" onClick={load}>
+          به‌روزرسانی
+        </CyberButton>
+      </div>
+
+      <div className="space-y-3">
+        <DiagRow label="cwd" value={String(diag?.cwd || "")} />
+        <DiagRow label="Xray Dir" value={String(diag?.xrayDir || "")} />
+        <DiagRow
+          label="باینری Xray"
+          value={
+            diag?.binaryExists
+              ? `موجود (${Number(diag.size || 0).toLocaleString("fa-IR")} بایت، قابل اجرا: ${diag.binaryExecutable ? "بله" : "خیر"})`
+              : "❌ یافت نشد"
+          }
+          bad={!diag?.binaryExists}
+        />
+        <DiagRow
+          label="نسخه Xray"
+          value={String(diag?.versionOutput || "—")}
+          mono
+        />
+        <DiagRow
+          label="خطای باینری"
+          value={String(diag?.error || "—")}
+          bad={Boolean(diag?.error)}
+          mono
+        />
+        <DiagRow
+          label="محتوای پوشه xray-core"
+          value={Array.isArray(diag?.dirContents) ? (diag?.dirContents as string[]).join(", ") : "—"}
+          mono
+        />
+        <DiagRow
+          label="config.json"
+          value={
+            (state?.configStat as { exists?: boolean; size?: number; path?: string })?.exists
+              ? `موجود (${(state?.configStat as { size?: number }).size?.toLocaleString("fa-IR") || "?"} بایت)`
+              : "❌ یافت نشد"
+          }
+          bad={!(state?.configStat as { exists?: boolean })?.exists}
+        />
+        <DiagRow
+          label="حالت"
+          value={state?.mode === "live" ? "زنده (باینری موجود)" : "شبیه‌سازی"}
+          bad={state?.mode !== "live"}
+        />
+        <DiagRow
+          label="در حال اجرا"
+          value={state?.running ? `بله (PID ${state.pid})` : "خیر"}
+          bad={!state?.running}
+        />
+        <DiagRow
+          label="آخرین خطا"
+          value={String(state?.lastError || "—")}
+          bad={Boolean(state?.lastError)}
+          mono
+        />
+      </div>
+
+      <div className="pt-4 border-t border-[#2de8d0]/15">
+        <MicroLabel color="cyan" className="mb-2 block">بررسی پورت‌های داخلی</MicroLabel>
+        <div className="space-y-2 text-xs">
+          <div className="flex items-center gap-2">
+            <span className="font-mono-cyber" dir="ltr">Xray (:{String(ports?.xray?.port || "?")}):</span>
+            <span className={(ports?.xray as { portOpen?: boolean })?.portOpen ? "protocol-chip green" : "protocol-chip magenta"}>
+              {(ports?.xray as { portOpen?: boolean })?.portOpen ? "✓ باز است" : "✗ بسته"}
+            </span>
+            {(ports?.xray as { portError?: string })?.portError && (
+              <span className="text-[#ff2f6e] font-mono-cyber text-[10px]" dir="ltr">
+                {(ports?.xray as { portError?: string }).portError}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="font-mono-cyber" dir="ltr">Next.js (:{String(ports?.nextjs?.port || "?")}):</span>
+            <span className={(ports?.nextjs as { portOpen?: boolean })?.portOpen ? "protocol-chip green" : "protocol-chip magenta"}>
+              {(ports?.nextjs as { portOpen?: boolean })?.portOpen ? "✓ باز است" : "✗ بسته"}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="font-mono-cyber" dir="ltr">Caddy (:{String(ports?.caddy?.port || "?")}):</span>
+            <span className="text-muted-foreground">(پورت Railway)</span>
+          </div>
+        </div>
+        {!(ports?.xray as { portOpen?: boolean })?.portOpen && (
+          <div className="mt-2 p-2 rounded border border-[#ff2f6e]/30 bg-[#ff2f6e]/8 text-[#ff2f6e] text-xs">
+            ⚠ پورت Xray بسته است! Xray احتمالاً کرش کرده. لاگ‌های زیر را بررسی کنید.
+          </div>
+        )}
+      </div>
+
+      <div className="pt-4 border-t border-[#2de8d0]/15">
+        <MicroLabel color="cyan" className="mb-2 block">متغیرهای Railway TCP Proxy</MicroLabel>
+        <div className="space-y-1 text-xs font-mono-cyber" dir="ltr">
+          <div>RAILWAY_TCP_PROXY_DOMAIN = {String(state?.railwayTcp?.domain || "[null]")}</div>
+          <div>RAILWAY_TCP_PROXY_PORT = {String(state?.railwayTcp?.port || "[null]")}</div>
+          <div>RAILWAY_TCP_APPLICATION_PORT = {String(state?.railwayTcp?.applicationPort || "[null]")}</div>
+        </div>
+      </div>
+
+      {state?.lastLogTail && (
+        <div className="pt-4 border-t border-[#2de8d0]/15">
+          <MicroLabel color="magenta" className="mb-2 block">آخرین لاگ‌های Xray</MicroLabel>
+          <pre
+            className="text-[10px] font-mono-cyber bg-[#050810] border border-[#2de8d0]/20 p-3 rounded max-h-64 overflow-y-auto"
+            dir="ltr"
+          >
+            {state.lastLogTail}
+          </pre>
+        </div>
+      )}
+    </GlowCard>
+  );
+}
+
+function DiagRow({
+  label,
+  value,
+  bad,
+  mono,
+}: {
+  label: string;
+  value: string;
+  bad?: boolean;
+  mono?: boolean;
+}) {
+  return (
+    <div className="flex flex-col md:flex-row md:items-center gap-1 md:gap-3">
+      <div className="md:w-48 flex-shrink-0">
+        <MicroLabel>{label}</MicroLabel>
+      </div>
+      <div
+        className={`flex-1 text-sm ${mono ? "font-mono-cyber" : ""} ${
+          bad ? "neon-text-magenta" : "text-foreground"
+        }`}
+        dir={mono ? "ltr" : "rtl"}
+      >
+        {value}
+      </div>
+    </div>
   );
 }

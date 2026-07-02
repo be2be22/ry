@@ -1,19 +1,25 @@
 // Subscription link generator — produces 8 protocol URIs per user
 // تولید لینک اشتراک — ۸ پروتکل برای هر کاربر
 //
-// Each user gets the following 8 configs (TLS terminated at Railway edge):
-//   1. VLESS + WS + TLS
-//   2. VLESS + gRPC + TLS
-//   3. VMess + WS + TLS
-//   4. Trojan + WS + TLS
-//   5. Trojan + gRPC + TLS
-//   6. VLESS + XTLS-Reality
-//   7. VLESS + xHTTP + TLS
-//   8. VLESS + TCP + XTLS-Vision + TLS  (the "best additional" choice — high throughput)
+// Each user gets the following 8 configs:
+//   1. VLESS + WS + TLS        (via Railway HTTPS reverse proxy — port 443)
+//   2. VLESS + gRPC + TLS      (via Railway HTTPS reverse proxy — port 443)
+//   3. VMess + WS + TLS        (via Railway HTTPS reverse proxy — port 443)
+//   4. Trojan + WS + TLS       (via Railway HTTPS reverse proxy — port 443)
+//   5. Trojan + gRPC + TLS     (via Railway HTTPS reverse proxy — port 443)
+//   6. VLESS + XTLS-Reality    (via Railway TCP Proxy — needs RAILWAY_TCP_PROXY_*)
+//   7. VLESS + xHTTP + TLS     (via Railway HTTPS reverse proxy — port 443)
+//   8. VLESS + TCP + XTLS-Vision (via Railway TCP Proxy)
 //
-// No Shadowsocks. No SOCKS/HTTP. No plain VLESS+TCP+TLS without XTLS.
+// IMPORTANT: Path values like "/vless-ws" must NOT be URL-encoded in the URI.
+// URLSearchParams.toString() encodes "/" as "%2F" which breaks the path on
+// the server side (returns 404). We build the query string manually instead.
 
 import { db } from "@/lib/db";
+import {
+  getRailwayTcpProxyDomain,
+  getRailwayTcpProxyPort,
+} from "@/lib/xray";
 
 export interface ProtocolConfig {
   index: number;
@@ -23,21 +29,40 @@ export interface ProtocolConfig {
   security: "tls" | "reality" | "none";
   uri: string;
   tag: string;
-  color: string; // for UI chip color
+  color: string;
   remark: string;
+  needsTcpProxy: boolean;
+  warning?: string;
 }
 
 /**
  * Generate all 8 config URIs for a VPN user.
- * The `host` is the public-facing domain (Railway domain).
  */
 export async function generateUserConfigs(
   userUuid: string,
   username: string,
   host: string
 ): Promise<ProtocolConfig[]> {
-  const sni = host;
-  const PORT = 443; // clients connect on 443 (Railway HTTPS)
+  // Railway TCP Proxy info — needed for Reality and raw-TCP protocols
+  const tcpHost = getRailwayTcpProxyDomain();
+  const tcpPort = getRailwayTcpProxyPort();
+
+  // Reality key info — validate length and format
+  const realityPubKeyRaw =
+    process.env.XRAY_REALITY_PUBLIC_KEY ||
+    (await db.setting.findUnique({ where: { key: "xray_reality_public_key" } }))?.value ||
+    "";
+  const realityShortIdRaw =
+    process.env.XRAY_REALITY_SHORT_ID ||
+    (await db.setting.findUnique({ where: { key: "xray_reality_short_id" } }))?.value ||
+    "";
+  const realityPubKey =
+    realityPubKeyRaw && realityPubKeyRaw.length >= 40 ? realityPubKeyRaw : "";
+  const realityShortId =
+    realityShortIdRaw && /^[0-9a-f]{1,16}$/i.test(realityShortIdRaw)
+      ? realityShortIdRaw
+      : "";
+  const realitySni = "www.microsoft.com";
 
   const configs: ProtocolConfig[] = [
     {
@@ -49,7 +74,8 @@ export async function generateUserConfigs(
       tag: "vless-ws",
       color: "cyan",
       remark: `${username}-vless-ws`,
-      uri: buildVlessWs(userUuid, host, sni, "/vless-ws", PORT),
+      needsTcpProxy: false,
+      uri: buildVlessWs(userUuid, host, host, "/vless-ws", 443),
     },
     {
       index: 2,
@@ -58,9 +84,12 @@ export async function generateUserConfigs(
       transport: "grpc",
       security: "tls",
       tag: "vless-grpc",
-      color: "cyan",
+      color: "yellow",
       remark: `${username}-vless-grpc`,
-      uri: buildVlessGrpc(userUuid, host, sni, "vless-grpc", PORT),
+      needsTcpProxy: false,
+      warning:
+        "gRPC روی Railway پشتیبانی نمی‌شود — nginx نمی‌تواند ترافیک gRPC را به Xray فوروارد کند. از کانفیگ‌های WebSocket استفاده کنید.",
+      uri: "", // Empty — config won't be generated
     },
     {
       index: 3,
@@ -71,7 +100,8 @@ export async function generateUserConfigs(
       tag: "vmess-ws",
       color: "purple",
       remark: `${username}-vmess-ws`,
-      uri: buildVmessWs(userUuid, host, sni, "/vmess-ws", PORT),
+      needsTcpProxy: false,
+      uri: buildVmessWs(userUuid, host, host, "/vmess-ws", 443),
     },
     {
       index: 4,
@@ -82,7 +112,8 @@ export async function generateUserConfigs(
       tag: "trojan-ws",
       color: "magenta",
       remark: `${username}-trojan-ws`,
-      uri: buildTrojanWs(userUuid, host, sni, "/trojan-ws", PORT),
+      needsTcpProxy: false,
+      uri: buildTrojanWs(userUuid, host, host, "/trojan-ws", 443),
     },
     {
       index: 5,
@@ -91,9 +122,12 @@ export async function generateUserConfigs(
       transport: "grpc",
       security: "tls",
       tag: "trojan-grpc",
-      color: "magenta",
+      color: "yellow",
       remark: `${username}-trojan-grpc`,
-      uri: buildTrojanGrpc(userUuid, host, sni, "trojan-grpc", PORT),
+      needsTcpProxy: false,
+      warning:
+        "gRPC روی Railway پشتیبانی نمی‌شود — از کانفیگ‌های WebSocket استفاده کنید.",
+      uri: "",
     },
     {
       index: 6,
@@ -104,7 +138,24 @@ export async function generateUserConfigs(
       tag: "vless-reality",
       color: "green",
       remark: `${username}-vless-reality`,
-      uri: buildVlessReality(userUuid, host, PORT),
+      needsTcpProxy: true,
+      warning:
+        !tcpHost || !tcpPort
+          ? "برای Reality باید Railway TCP Proxy فعال باشد (متغیرهای RAILWAY_TCP_PROXY_DOMAIN/PORT)"
+          : !realityPubKey
+          ? "برای Reality باید کلید عمومی Reality را در تنظیمات وارد کنید"
+          : undefined,
+      uri:
+        tcpHost && tcpPort && realityPubKey
+          ? buildVlessReality(
+              userUuid,
+              tcpHost,
+              tcpPort,
+              realitySni,
+              realityPubKey,
+              realityShortId
+            )
+          : "",
     },
     {
       index: 7,
@@ -115,7 +166,10 @@ export async function generateUserConfigs(
       tag: "vless-xhttp",
       color: "yellow",
       remark: `${username}-vless-xhttp`,
-      uri: buildVlessXhttp(userUuid, host, sni, "/vless-xhttp", PORT),
+      needsTcpProxy: false,
+      warning:
+        "xHTTP روی Railway پشتیبانی نمی‌شود — nginx نمی‌تواند ترافیک xHTTP را به Xray فوروارد کند. از کانفیگ‌های WebSocket استفاده کنید.",
+      uri: "",
     },
     {
       index: 8,
@@ -126,31 +180,55 @@ export async function generateUserConfigs(
       tag: "vless-tcp-xtls",
       color: "green",
       remark: `${username}-vless-xtls`,
-      uri: buildVlessXtlsVision(userUuid, host, sni, PORT),
+      needsTcpProxy: true,
+      warning:
+        !tcpHost || !tcpPort
+          ? "برای XTLS-Vision باید Railway TCP Proxy فعال باشد (متغیرهای RAILWAY_TCP_PROXY_DOMAIN/PORT)"
+          : undefined,
+      uri:
+        tcpHost && tcpPort
+          ? buildVlessXtlsVision(userUuid, tcpHost, tcpPort, host)
+          : "",
     },
   ];
 
   return configs;
 }
 
+/**
+ * Build a query string from key-value pairs WITHOUT URL-encoding the values.
+ * This prevents "/" from being encoded as "%2F" which breaks path-based
+ * protocols like WebSocket and xHTTP.
+ */
+function buildQuery(params: Record<string, string>): string {
+  return Object.entries(params)
+    .filter(([, v]) => v !== "" && v !== undefined && v !== null)
+    .map(([k, v]) => `${k}=${v}`)
+    .join("&");
+}
+
 function buildVlessWs(uuid: string, host: string, sni: string, path: string, port: number) {
-  const params = new URLSearchParams({
+  const query = buildQuery({
     encryption: "none",
     security: "tls",
     sni,
     type: "ws",
     host,
-    path: encodeURIComponent(path),
+    path,
     fp: "chrome",
     alpn: "h2,http/1.1",
   });
-  return `vless://${uuid}@${host}:${port}?${params.toString()}#${encodeURIComponent(
-    "VLESS-WS-TLS"
-  )}`;
+  return `vless://${uuid}@${host}:${port}?${query}#${encodeURIComponent("VLESS-WS-TLS")}`;
 }
 
-function buildVlessGrpc(uuid: string, host: string, sni: string, serviceName: string, port: number) {
-  const params = new URLSearchParams({
+function buildVlessGrpc(
+  uuid: string,
+  host: string,
+  sni: string,
+  serviceName: string,
+  port: number
+) {
+  const query = buildQuery({
     encryption: "none",
     security: "tls",
     sni,
@@ -160,9 +238,7 @@ function buildVlessGrpc(uuid: string, host: string, sni: string, serviceName: st
     fp: "chrome",
     alpn: "h2",
   });
-  return `vless://${uuid}@${host}:${port}?${params.toString()}#${encodeURIComponent(
-    "VLESS-gRPC-TLS"
-  )}`;
+  return `vless://${uuid}@${host}:${port}?${query}#${encodeURIComponent("VLESS-gRPC-TLS")}`;
 }
 
 function buildVmessWs(uuid: string, host: string, sni: string, path: string, port: number) {
@@ -187,22 +263,26 @@ function buildVmessWs(uuid: string, host: string, sni: string, path: string, por
 }
 
 function buildTrojanWs(password: string, host: string, sni: string, path: string, port: number) {
-  const params = new URLSearchParams({
+  const query = buildQuery({
     security: "tls",
     sni,
     type: "ws",
     host,
-    path: encodeURIComponent(path),
+    path,
     fp: "chrome",
     alpn: "h2,http/1.1",
   });
-  return `trojan://${password}@${host}:${port}?${params.toString()}#${encodeURIComponent(
-    "Trojan-WS-TLS"
-  )}`;
+  return `trojan://${password}@${host}:${port}?${query}#${encodeURIComponent("Trojan-WS-TLS")}`;
 }
 
-function buildTrojanGrpc(password: string, host: string, sni: string, serviceName: string, port: number) {
-  const params = new URLSearchParams({
+function buildTrojanGrpc(
+  password: string,
+  host: string,
+  sni: string,
+  serviceName: string,
+  port: number
+) {
+  const query = buildQuery({
     security: "tls",
     sni,
     type: "grpc",
@@ -211,50 +291,47 @@ function buildTrojanGrpc(password: string, host: string, sni: string, serviceNam
     fp: "chrome",
     alpn: "h2",
   });
-  return `trojan://${password}@${host}:${port}?${params.toString()}#${encodeURIComponent(
-    "Trojan-gRPC-TLS"
-  )}`;
+  return `trojan://${password}@${host}:${port}?${query}#${encodeURIComponent("Trojan-gRPC-TLS")}`;
 }
 
-function buildVlessReality(uuid: string, host: string, port: number) {
-  // Reality uses a "borrowed" SNI (serverName) — clients connect to `host`
-  // but pretend it's the dest server. In Railway this won't actually work
-  // over the public HTTPS port (Reality needs raw TCP), but the config is
-  // generated for completeness; it'll work if you expose a raw TCP port.
-  const params = new URLSearchParams({
+function buildVlessReality(
+  uuid: string,
+  host: string,
+  port: number,
+  sni: string,
+  publicKey: string,
+  shortId: string
+) {
+  const query = buildQuery({
     encryption: "none",
     security: "reality",
-    sni: "www.microsoft.com",
+    sni,
     fp: "chrome",
-    pbk: "", // public key — filled at install time
-    sid: "",
+    pbk: publicKey,
+    sid: shortId,
     type: "tcp",
     flow: "xtls-rprx-vision",
   });
-  return `vless://${uuid}@${host}:${port}?${params.toString()}#${encodeURIComponent(
-    "VLESS-Reality"
-  )}`;
+  return `vless://${uuid}@${host}:${port}?${query}#${encodeURIComponent("VLESS-Reality")}`;
 }
 
 function buildVlessXhttp(uuid: string, host: string, sni: string, path: string, port: number) {
-  const params = new URLSearchParams({
+  const query = buildQuery({
     encryption: "none",
     security: "tls",
     sni,
     type: "xhttp",
     host,
-    path: encodeURIComponent(path),
+    path,
     mode: "auto",
     fp: "chrome",
     alpn: "h2,http/1.1",
   });
-  return `vless://${uuid}@${host}:${port}?${params.toString()}#${encodeURIComponent(
-    "VLESS-xHTTP-TLS"
-  )}`;
+  return `vless://${uuid}@${host}:${port}?${query}#${encodeURIComponent("VLESS-xHTTP-TLS")}`;
 }
 
-function buildVlessXtlsVision(uuid: string, host: string, sni: string, port: number) {
-  const params = new URLSearchParams({
+function buildVlessXtlsVision(uuid: string, host: string, port: number, sni: string) {
+  const query = buildQuery({
     encryption: "none",
     security: "tls",
     sni,
@@ -263,13 +340,12 @@ function buildVlessXtlsVision(uuid: string, host: string, sni: string, port: num
     fp: "chrome",
     alpn: "h2,http/1.1",
   });
-  return `vless://${uuid}@${host}:${port}?${params.toString()}#${encodeURIComponent(
-    "VLESS-XTLS-Vision"
-  )}`;
+  return `vless://${uuid}@${host}:${port}?${query}#${encodeURIComponent("VLESS-XTLS-Vision")}`;
 }
 
 /**
- * Build the full base64 subscription blob for a user (for v2rayNG/Hiddify/etc).
+ * Build the full base64 subscription blob for a user.
+ * Filters out configs with empty URIs (e.g., Reality when TCP proxy not configured).
  */
 export async function buildBase64Subscription(
   userUuid: string,
@@ -277,7 +353,10 @@ export async function buildBase64Subscription(
   host: string
 ): Promise<string> {
   const configs = await generateUserConfigs(userUuid, username, host);
-  const blob = configs.map((c) => c.uri).join("\n");
+  const blob = configs
+    .filter((c) => c.uri)
+    .map((c) => c.uri)
+    .join("\n");
   return Buffer.from(blob, "utf-8").toString("base64");
 }
 

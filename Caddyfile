@@ -1,0 +1,85 @@
+# Caddyfile — reverse proxy for CyberX VPN Panel
+# Caddy listens on port 3000 (Railway's $PORT) and routes each protocol's
+# path to its OWN dedicated internal Xray port (Xray cannot bind multiple
+# inbounds to the same port — each protocol needs a separate listener):
+#   /vless-ws     → 10001
+#   /vless-grpc   → 10002
+#   /vmess-ws     → 10003
+#   /trojan-ws    → 10004
+#   /trojan-grpc  → 10005
+#   /vless-xhttp  → 10006
+#   everything else → Next.js (3001)
+
+{
+	admin off
+	auto_https off
+	log {
+		output stdout
+		format console
+		level INFO
+	}
+}
+
+:3000 {
+	@vless_ws path /vless-ws /vless-ws/*
+	reverse_proxy @vless_ws localhost:10001 {
+		header_up Host {host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+		flush_interval -1
+	}
+
+	@vmess_ws path /vmess-ws /vmess-ws/*
+	reverse_proxy @vmess_ws localhost:10003 {
+		header_up Host {host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+		flush_interval -1
+	}
+
+	@trojan_ws path /trojan-ws /trojan-ws/*
+	reverse_proxy @trojan_ws localhost:10004 {
+		header_up Host {host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+		flush_interval -1
+	}
+
+	@vless_xhttp path /vless-xhttp /vless-xhttp/*
+	reverse_proxy @vless_xhttp localhost:10006 {
+		header_up Host {host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+		flush_interval -1
+	}
+
+	# gRPC: routed strictly by path since two different gRPC inbounds exist
+	# (vless-grpc, trojan-grpc) on two different ports — a Content-Type-only
+	# match can't tell them apart, so path match must come first.
+	@vless_grpc path /vless-grpc /vless-grpc/*
+	reverse_proxy @vless_grpc localhost:10002 {
+		header_up Host {host}
+		header_up X-Forwarded-For {remote_host}
+		transport http {
+			versions 2h
+		}
+		flush_interval -1
+	}
+
+	@trojan_grpc path /trojan-grpc /trojan-grpc/*
+	reverse_proxy @trojan_grpc localhost:10005 {
+		header_up Host {host}
+		header_up X-Forwarded-For {remote_host}
+		transport http {
+			versions 2h
+		}
+		flush_interval -1
+	}
+
+	# Everything else → Next.js
+	reverse_proxy localhost:3001 {
+		header_up Host {host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+}

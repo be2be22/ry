@@ -10,10 +10,11 @@ const db = new PrismaClient();
 async function main() {
   console.log("🌱 Seeding database...");
 
-  // 1) Default super-admin (username: admin, password: admin12345)
+  // 1) Default super-admin (username: admin, password from env or admin12345)
+  const adminPassword = process.env.DEFAULT_ADMIN_PASSWORD || "admin12345";
   const existingAdmin = await db.admin.findUnique({ where: { username: "admin" } });
   if (!existingAdmin) {
-    const hash = await bcrypt.hash("admin12345", 10);
+    const hash = await bcrypt.hash(adminPassword, 10);
     await db.admin.create({
       data: {
         username: "admin",
@@ -21,7 +22,7 @@ async function main() {
         role: "SUPER_ADMIN",
       },
     });
-    console.log("✓ Created default admin (admin / admin12345)");
+    console.log(`✓ Created default admin (admin / ${adminPassword})`);
   } else {
     console.log("• Admin already exists, skipping");
   }
